@@ -7,7 +7,7 @@ Exec=ru.auroraos.OverleafClient
 X-Nemo-Application-Type=silica-qt5
 
 [X-Application]
-Permissions=Internet;DeviceInfo
+Permissions=Internet;DeviceInfo;Downloads
 OrganizationName=ru.auroraos
 ApplicationName=OverleafClient
 

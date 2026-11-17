@@ -22,6 +22,12 @@ class OverleafClient : public QObject
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
     Q_PROPERTY(bool authenticated READ authenticated NOTIFY authenticatedChanged)
     Q_PROPERTY(QVariantList projects READ projects NOTIFY projectsChanged)
+    Q_PROPERTY(QObject *coverEditor READ coverEditor NOTIFY coverEditorChanged)
+    Q_PROPERTY(bool coverShowsProjects READ coverShowsProjects WRITE setCoverShowsProjects NOTIFY coverShowsProjectsChanged)
+    Q_PROPERTY(bool archiveBusy READ archiveBusy NOTIFY archiveBusyChanged)
+    Q_PROPERTY(QString archiveError READ archiveError NOTIFY archiveStatusChanged)
+    Q_PROPERTY(QString archivePath READ archivePath NOTIFY archiveStatusChanged)
+    Q_PROPERTY(QString archiveProject READ archiveProject NOTIFY archiveStatusChanged)
     Q_PROPERTY(QString pdfPath READ pdfPath NOTIFY pdfPathChanged)
     Q_PROPERTY(QString pdfError READ pdfError NOTIFY pdfErrorChanged)
     Q_PROPERTY(bool pdfBusy READ pdfBusy NOTIFY pdfBusyChanged)
@@ -43,6 +49,13 @@ public:
     bool busy() const;
     bool authenticated() const;
     QVariantList projects() const;
+    QObject *coverEditor() const;
+    bool coverShowsProjects() const;
+    void setCoverShowsProjects(bool show);
+    bool archiveBusy() const;
+    QString archiveError() const;
+    QString archivePath() const;
+    QString archiveProject() const;
     QString pdfPath() const;
     QString pdfError() const;
     bool pdfBusy() const;
@@ -65,6 +78,9 @@ public:
     Q_INVOKABLE void refreshProjects();
     Q_INVOKABLE void compileProjectPdf(const QString &projectId, const QString &rootPath);
     Q_INVOKABLE void closeProjectPdf();
+    Q_INVOKABLE QUrl cachedPdfForExternalOpen();
+    Q_INVOKABLE void setCoverEditor(QObject *editor);
+    Q_INVOKABLE void downloadProjectArchive(const QString &projectId);
     Q_INVOKABLE void syncSourceToPdf(const QString &projectId, const QString &path, int line, int column);
     Q_INVOKABLE void syncPdfToSource(const QString &projectId, int page, double h, double v);
     Q_INVOKABLE void loadProjectFiles(const QString &projectId);
@@ -83,6 +99,11 @@ signals:
     void busyChanged();
     void authenticatedChanged();
     void projectsChanged();
+    void coverEditorChanged();
+    void coverShowsProjectsChanged();
+    void archiveBusyChanged();
+    void archiveStatusChanged();
+    void archiveDownloaded(const QString &path);
     void pdfPathChanged();
     void pdfErrorChanged();
     void pdfBusyChanged();
@@ -126,6 +147,14 @@ private:
     QByteArray m_cookieHeader;
     QByteArray m_csrf;
     QVariantList m_projects;
+    QPointer<QObject> m_coverEditor;
+    bool m_coverShowsProjects = true;
+    QPointer<QNetworkReply> m_archiveReply;
+    QScopedPointer<QTemporaryFile> m_archiveFile;
+    QString m_archiveError;
+    QString m_archivePath;
+    QString m_archiveProject;
+    bool m_archiveBusy = false;
     QString m_error;
     bool m_busy = false;
     bool m_authenticated = false;

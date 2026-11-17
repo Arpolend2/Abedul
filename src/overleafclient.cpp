@@ -42,6 +42,19 @@ QString OverleafClient::error() const { return m_error; }
 bool OverleafClient::busy() const { return m_busy; }
 bool OverleafClient::authenticated() const { return m_authenticated; }
 QVariantList OverleafClient::projects() const { return m_projects; }
+QObject *OverleafClient::coverEditor() const { return m_coverEditor.data(); }
+bool OverleafClient::coverShowsProjects() const { return m_coverShowsProjects; }
+void OverleafClient::setCoverShowsProjects(bool show)
+{
+    if (m_coverShowsProjects == show)
+        return;
+    m_coverShowsProjects = show;
+    emit coverShowsProjectsChanged();
+}
+bool OverleafClient::archiveBusy() const { return m_archiveBusy; }
+QString OverleafClient::archiveError() const { return m_archiveError; }
+QString OverleafClient::archivePath() const { return m_archivePath; }
+QString OverleafClient::archiveProject() const { return m_archiveProject; }
 QString OverleafClient::pdfPath() const { return m_pdfPath; }
 QString OverleafClient::pdfError() const { return m_pdfError; }
 bool OverleafClient::pdfBusy() const { return m_pdfBusy; }
@@ -54,6 +67,156 @@ QString OverleafClient::sourceError() const { return m_sourceError; }
 bool OverleafClient::sourceBusy() const { return m_sourceBusy; }
 bool OverleafClient::pdfOnLeft() const { return m_pdfOnLeft; }
 int OverleafClient::editorFontScale() const { return m_editorFontScale; }
+
+void OverleafClient::setCoverEditor(QObject *editor)
+{
+    if (m_coverEditor == editor)
+        return;
+    if (m_coverEditor)
+        disconnect(m_coverEditor, &QObject::destroyed, this, nullptr);
+    m_coverEditor = editor;
+    if (editor) {
+        connect(editor, &QObject::destroyed, this, [this]() {
+            m_coverEditor.clear();
+            emit coverEditorChanged();
+        });
+    }
+    emit coverEditorChanged();
+}
+
+QUrl OverleafClient::cachedPdfForExternalOpen()
+{
+    if (m_pdfPath.isEmpty()) {
+        setPdfError(tr("There is no cached PDF to open."));
+        return QUrl();
+    }
+    QFile source(m_pdfPath);
+    const QString cache = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+    if (!source.open(QIODevice::ReadOnly)) {
+        setPdfError(tr("Could not read the cached PDF: %1").arg(source.errorString()));
+        return QUrl();
+    }
+    if (cache.isEmpty() || !QDir().mkpath(cache)) {
+        setPdfError(tr("Could not prepare a temporary file."));
+        return QUrl();
+    }
+    QScopedPointer<QTemporaryFile> file(new QTemporaryFile(
+        QDir(cache).filePath(QStringLiteral("Abedul-XXXXXX.pdf"))));
+    if (!file->open()) {
+        setPdfError(tr("Could not create a temporary PDF: %1").arg(file->errorString()));
+        return QUrl();
+    }
+    while (!source.atEnd()) {
+        const QByteArray data = source.read(64 * 1024);
+        if (data.isEmpty() || file->write(data) != data.size()) {
+            setPdfError(tr("Could not copy the cached PDF."));
+            return QUrl();
+        }
+        if (source.error() != QFileDevice::NoError) {
+            setPdfError(tr("Could not read the cached PDF: %1").arg(source.errorString()));
+            return QUrl();
+        }
+    }
+    if (!file->flush()) {
+        setPdfError(tr("Could not write the temporary PDF: %1").arg(file->errorString()));
+        return QUrl();
+    }
+    const QUrl result = QUrl::fromLocalFile(file->fileName());
+    file->close();
+    file.take()->setParent(this);
+    setPdfError(QString());
+    return result;
+}
+
+void OverleafClient::downloadProjectArchive(const QString &projectId)
+{
+    if (m_archiveBusy)
+        return;
+    QString name;
+    for (const QVariant &entry : m_projects) {
+        const QVariantMap project = entry.toMap();
+        if (project.value(QStringLiteral("id")).toString() == projectId
+                && !project.value(QStringLiteral("trashed")).toBool()) {
+            name = project.value(QStringLiteral("name")).toString();
+            break;
+        }
+    }
+    m_archiveError.clear();
+    m_archivePath.clear();
+    m_archiveProject = projectId;
+    if (!m_authenticated || name.isEmpty()) {
+        m_archiveError = tr("This project is not available in the current session.");
+        emit archiveStatusChanged();
+        return;
+    }
+    name.replace(QRegularExpression(QStringLiteral("[\\\\/:*?\"<>|\\x00-\\x1f]")), QStringLiteral("_"));
+    name = name.trimmed().left(100);
+    if (name.isEmpty() || name == QStringLiteral(".") || name == QStringLiteral(".."))
+        name = QStringLiteral("project");
+    const QString downloads = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+    if (downloads.isEmpty() || !QDir().mkpath(downloads)) {
+        m_archiveError = tr("Could not access the Downloads folder.");
+        emit archiveStatusChanged();
+        return;
+    }
+    m_archiveFile.reset(new QTemporaryFile(QDir(downloads).filePath(name + QStringLiteral("-XXXXXX.zip"))));
+    if (!m_archiveFile->open()) {
+        m_archiveError = tr("Could not create the ZIP archive: %1").arg(m_archiveFile->errorString());
+        m_archiveFile.reset();
+        emit archiveStatusChanged();
+        return;
+    }
+    m_archiveBusy = true;
+    emit archiveBusyChanged();
+    emit archiveStatusChanged();
+    const QString id = QString::fromLatin1(QUrl::toPercentEncoding(projectId));
+    const QUrl archiveServer = m_server;
+    QNetworkReply *reply = m_network.get(request(QStringLiteral("/project/") + id + QStringLiteral("/download/zip")));
+    m_archiveReply = reply;
+    QTimer::singleShot(120000, reply, [reply]() { if (reply->isRunning()) reply->abort(); });
+    connect(reply, &QNetworkReply::readyRead, this, [this, reply]() {
+        const QByteArray data = reply->readAll();
+        if (m_archiveFile && m_archiveFile->write(data) != data.size()) {
+            m_archiveError = tr("Could not write the ZIP archive: %1").arg(m_archiveFile->errorString());
+            reply->abort();
+        }
+    });
+    connect(reply, &QNetworkReply::finished, this, [this, reply, archiveServer]() {
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const bool ok = reply->error() == QNetworkReply::NoError && status >= 200 && status < 300;
+        const QString detail = reply->errorString();
+        const QByteArray remaining = reply->readAll();
+        m_archiveReply.clear();
+        reply->deleteLater();
+        if (m_server != archiveServer) {
+            m_archiveFile.reset();
+            m_archiveBusy = false;
+            emit archiveBusyChanged();
+            return;
+        }
+        if (!ok && m_archiveError.isEmpty())
+            m_archiveError = tr("Could not download the ZIP archive (HTTP %1): %2").arg(status).arg(detail);
+        if (m_archiveError.isEmpty() && m_archiveFile
+                && (m_archiveFile->write(remaining) != remaining.size() || !m_archiveFile->flush()))
+            m_archiveError = tr("Could not write the ZIP archive: %1").arg(m_archiveFile->errorString());
+        if (m_archiveError.isEmpty() && m_archiveFile) {
+            m_archiveFile->seek(0);
+            const QByteArray signature = m_archiveFile->read(4);
+            if (signature != QByteArray("PK\003\004", 4) && signature != QByteArray("PK\005\006", 4))
+                m_archiveError = tr("The server did not return a ZIP archive.");
+        }
+        if (m_archiveError.isEmpty() && m_archiveFile) {
+            m_archivePath = m_archiveFile->fileName();
+            m_archiveFile->setAutoRemove(false);
+        }
+        m_archiveFile.reset();
+        m_archiveBusy = false;
+        emit archiveBusyChanged();
+        emit archiveStatusChanged();
+        if (!m_archivePath.isEmpty())
+            emit archiveDownloaded(m_archivePath);
+    });
+}
 
 void OverleafClient::setEditorFontScale(int percent)
 {
@@ -827,11 +990,17 @@ bool OverleafClient::setServer(const QString &address)
         setError(tr("Enter an HTTPS server address without a path."));
         return false;
     }
+    if (m_archiveReply)
+        m_archiveReply->abort();
     closeProjectPdf();
     closeProjectFiles();
     closeProjectSource();
     m_server = url;
     m_server.setPath(QString());
+    m_archiveError.clear();
+    m_archivePath.clear();
+    m_archiveProject.clear();
+    emit archiveStatusChanged();
     m_cookieHeader.clear();
     m_csrf.clear();
     m_projects.clear();

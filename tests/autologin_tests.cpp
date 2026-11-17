@@ -29,7 +29,9 @@ class FakeProjectClient : public QObject
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
     Q_PROPERTY(QString error READ error CONSTANT)
     Q_PROPERTY(QString server READ server CONSTANT)
+    Q_PROPERTY(bool coverShowsProjects MEMBER coverShowsProjects)
 public:
+    bool coverShowsProjects = true;
     QVariantList projects() const
     {
         return {
@@ -111,6 +113,7 @@ public:
     Q_INVOKABLE void pop() { ++pops; }
     Q_INVOKABLE void navigateBack() { ++backwards; }
     Q_INVOKABLE void navigateForward() { ++forwards; }
+    Q_INVOKABLE QObject *nextPage(QObject *) { return nullptr; }
     Q_INVOKABLE void push(const QUrl &url) { ++pushes; lastUrl = url; }
     Q_INVOKABLE void push(const QUrl &url, const QVariantMap &properties)
     { ++pushes; lastUrl = url; pushProperties = properties; }
@@ -138,6 +141,13 @@ public:
 class FakePdfClient : public QObject
 {
     Q_OBJECT
+    Q_PROPERTY(QVariantList projects READ projects NOTIFY projectsChanged)
+    Q_PROPERTY(QObject *coverEditor READ coverEditor NOTIFY coverEditorChanged)
+    Q_PROPERTY(bool coverShowsProjects MEMBER coverShowsProjects NOTIFY coverShowsProjectsChanged)
+    Q_PROPERTY(bool archiveBusy MEMBER archiveBusy NOTIFY archiveBusyChanged)
+    Q_PROPERTY(QString archiveError MEMBER archiveError NOTIFY archiveStatusChanged)
+    Q_PROPERTY(QString archivePath MEMBER archivePath NOTIFY archiveStatusChanged)
+    Q_PROPERTY(QString archiveProject MEMBER archiveProject NOTIFY archiveStatusChanged)
     Q_PROPERTY(QString server READ server CONSTANT)
     Q_PROPERTY(QString pdfPath READ pdfPath NOTIFY pdfPathChanged)
     Q_PROPERTY(QString pdfError READ pdfError CONSTANT)
@@ -149,6 +159,26 @@ class FakePdfClient : public QObject
     Q_PROPERTY(bool pdfOnLeft MEMBER pdfOnLeft NOTIFY pdfOnLeftChanged)
     Q_PROPERTY(int editorFontScale MEMBER editorFontScale NOTIFY editorFontScaleChanged)
 public:
+    QVariantList projects() const
+    {
+        return {QVariantMap{{QStringLiteral("id"), QStringLiteral("one")},
+                            {QStringLiteral("name"), QStringLiteral("First")}},
+                QVariantMap{{QStringLiteral("id"), QStringLiteral("two")},
+                            {QStringLiteral("name"), QStringLiteral("Deleted")},
+                            {QStringLiteral("trashed"), true}},
+                QVariantMap{{QStringLiteral("id"), QStringLiteral("three")},
+                            {QStringLiteral("name"), QStringLiteral("Other")}}};
+    }
+    QObject *coverEditor() const { return m_coverEditor; }
+    Q_INVOKABLE void setCoverEditor(QObject *editor) { m_coverEditor = editor; emit coverEditorChanged(); }
+    Q_INVOKABLE QUrl cachedPdfForExternalOpen() { return QUrl(); }
+    Q_INVOKABLE void downloadProjectArchive(const QString &project) { archiveRequested = project; }
+    bool archiveBusy = false;
+    bool coverShowsProjects = true;
+    QString archiveError;
+    QString archivePath;
+    QString archiveProject;
+    QString archiveRequested;
     QString server() const { return QStringLiteral("https://example.org"); }
     QString pdfPath() const { return m_path; }
     QString pdfError() const { return QString(); }
@@ -176,6 +206,11 @@ public:
     Q_INVOKABLE void saveProjectSource(const QString &, const QString &, const QString &, bool, const QString &) { ++saves; }
     Q_INVOKABLE void compileProjectPdf(const QString &, const QString &path) { ++compiles; root = path; }
 signals:
+    void projectsChanged();
+    void coverEditorChanged();
+    void coverShowsProjectsChanged();
+    void archiveBusyChanged();
+    void archiveStatusChanged();
     void pdfPathChanged();
     void pdfBusyChanged();
     void sourceBusyChanged();
@@ -188,6 +223,7 @@ signals:
     void syncPdfPositions(const QVariantList &positions);
     void syncSourcePositions(const QVariantList &positions);
 private:
+    QObject *m_coverEditor = nullptr;
     QString m_path;
     QString m_sourcePath;
     QString m_sourceText;
@@ -277,6 +313,7 @@ private slots:
     void loadsPdfGeometry();
     void automaticLoginOnlyAfterSuccessfulProjectLoad();
     void interfaceComponentsLoad();
+    void coverShowsProjectsAndRecentEdits();
     void opensProjectFilesByType();
     void editorPersistsDraft();
     void editorScrollsLongDocuments();
@@ -299,6 +336,7 @@ private slots:
     void settingsPersistAcrossClients();
     void changesServerFromProjects();
     void restoresLastProjectNavigation();
+    void attachedEditorSurvivesNavigation();
 };
 
 void AutoLoginTests::initTestCase()
@@ -427,6 +465,7 @@ void AutoLoginTests::interfaceComponentsLoad()
     QQmlEngine engine;
     const QUrl autoLoginUrl = QUrl::fromLocalFile(QStringLiteral(AUTO_LOGIN_QML_PATH));
     const QStringList pages = {QStringLiteral("EditorPage.qml"), QStringLiteral("ProjectsPage.qml"),
+                               QStringLiteral("CoverPage.qml"), QStringLiteral("OpenCachedPdf.qml"),
                                QStringLiteral("LoginPage.qml"), QStringLiteral("SettingsPage.qml"),
                                QStringLiteral("ProjectFilesPage.qml"), QStringLiteral("CompileRootPage.qml")};
     for (const QString &page : pages) {
@@ -435,6 +474,192 @@ void AutoLoginTests::interfaceComponentsLoad()
     }
     QQmlComponent window(&engine, autoLoginUrl.resolved(QUrl(QStringLiteral("../OverleafClient.qml"))));
     QVERIFY2(window.isReady(), qPrintable(window.errorString()));
+}
+
+void AutoLoginTests::coverShowsProjectsAndRecentEdits()
+{
+    QTemporaryDir directory;
+    DraftStore drafts(directory.path());
+    FakePdfClient client;
+    QQmlEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("overleafClient"), &client);
+    engine.rootContext()->setContextProperty(QStringLiteral("draftStore"), &drafts);
+    QQmlComponent stackComponent(&engine);
+    stackComponent.setData(R"(
+        import QtQuick 2.0
+        QtObject {
+            property var currentPage
+            property var projectsPage
+            property var attachedPage
+            property bool editorInStack: false
+            property bool busy: false
+            function find(test) {
+                if (editorInStack && test(attachedPage)) return attachedPage
+                return projectsPage && test(projectsPage) ? projectsPage : null
+            }
+            function nextPage(page) { return page === projectsPage ? attachedPage : null }
+            function pop(page, operation) { currentPage = page }
+            function navigateForward(operation) { currentPage = attachedPage }
+        }
+    )", QUrl());
+    QScopedPointer<QObject> stack(stackComponent.create());
+    QVERIFY2(stack, qPrintable(stackComponent.errorString()));
+    QObject projectsPage;
+    projectsPage.setObjectName(QStringLiteral("projectsPage"));
+    stack->setProperty("projectsPage", QVariant::fromValue(&projectsPage));
+    stack->setProperty("currentPage", QVariant::fromValue(&projectsPage));
+    engine.rootContext()->setContextProperty(QStringLiteral("pageStack"), stack.data());
+    const QUrl base = QUrl::fromLocalFile(QStringLiteral(AUTO_LOGIN_QML_PATH));
+    QQmlComponent coverComponent(&engine, base.resolved(QUrl(QStringLiteral("CoverPage.qml"))));
+    QVERIFY2(coverComponent.isReady(), qPrintable(coverComponent.errorString()));
+    QScopedPointer<QObject> cover(coverComponent.create());
+    QVERIFY2(cover, qPrintable(coverComponent.errorString()));
+    cover->setProperty("navigationStack", QVariant::fromValue(stack.data()));
+    cover->setProperty("width", 240);
+    cover->setProperty("height", 320);
+    QCOMPARE(cover->property("visibleProjects").toList().size(), 2);
+    QObject *title = cover->findChild<QObject *>(QStringLiteral("coverTitle"));
+    QVERIFY(title);
+    QCOMPARE(title->property("text").toString(), QString());
+
+    QQmlComponent component(&engine, base.resolved(QUrl(QStringLiteral("EditorPage.qml"))));
+    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+    QScopedPointer<QObject> page(component.beginCreate(engine.rootContext()));
+    QVERIFY(page);
+    page->setProperty("projectId", QStringLiteral("one"));
+    page->setProperty("projectName", QStringLiteral("First"));
+    component.completeCreate();
+    client.setProperty("coverShowsProjects", false);
+    client.setCoverEditor(page.data());
+    stack->setProperty("attachedPage", QVariant::fromValue(page.data()));
+    QVERIFY(QMetaObject::invokeMethod(cover.data(), "openCoverPage", Q_ARG(QVariant, false)));
+    QCOMPARE(stack->property("currentPage").value<QObject *>(), page.data());
+    QCOMPARE(title->property("text").toString(), QStringLiteral("First"));
+    client.setSource(QStringLiteral("/main.tex"), QStringLiteral("one\ntwo\nthree\nfour\nfive\nsix\nseven"));
+    QObject *editor = page->findChild<QObject *>(QStringLiteral("draftEditor"));
+    QVERIFY(editor);
+    editor->setProperty("text", QStringLiteral("one\ntwo\nthree\nchanged\nfive\nsix\nseven"));
+    QObject *textEdit = editor->property("_editor").value<QObject *>();
+    QVERIFY(textEdit);
+    textEdit->setProperty("cursorPosition", 21);
+    QTRY_VERIFY(page->property("coverSnippet").toString().contains(QStringLiteral("changed")));
+    QCOMPARE(page->property("coverSnippetFile").toString(), QStringLiteral("/main.tex"));
+    QObject *snippet = cover->findChild<QObject *>(QStringLiteral("coverSnippet"));
+    QVERIFY(snippet);
+    QCOMPARE(snippet->property("text").toString(), page->property("coverSnippet").toString());
+    QQmlComponent snapshotComponent(&engine);
+    snapshotComponent.setData("import QtQuick 2.0\nQtObject { property url url: \"\" }", QUrl());
+    QScopedPointer<QObject> snapshot(snapshotComponent.create());
+    QVERIFY(snapshot);
+    page->setProperty("coverPdfSnapshot", QVariant::fromValue(snapshot.data()));
+    QObject *pdfPeek = cover->findChild<QObject *>(QStringLiteral("coverPdfPeek"));
+    QVERIFY(pdfPeek);
+    QVERIFY(pdfPeek->property("visible").toBool());
+    QTest::qWait(100);
+    QVERIFY2(snippet->property("x").toReal() < pdfPeek->property("x").toReal(),
+             qPrintable(QStringLiteral("cover width=%1 text width=%2 x=%3 preview width=%4 x=%5")
+                        .arg(cover->property("width").toReal()).arg(snippet->property("width").toReal())
+                        .arg(snippet->property("x").toReal()).arg(pdfPeek->property("width").toReal())
+                        .arg(pdfPeek->property("x").toReal())));
+    client.setProperty("pdfOnLeft", true);
+    QTRY_VERIFY(pdfPeek->property("x").toReal() < snippet->property("x").toReal());
+    client.setProperty("pdfOnLeft", false);
+    QObject *zip = cover->findChild<QObject *>(QStringLiteral("coverDownloadZipWithoutPdf"));
+    QVERIFY(zip);
+    QVERIFY(QMetaObject::invokeMethod(zip, "triggered"));
+    QCOMPARE(client.archiveRequested, QStringLiteral("one"));
+    QObject *back = cover->findChild<QObject *>(QStringLiteral("coverShowProjectsWithoutPdf"));
+    QVERIFY(back);
+    stack->setProperty("editorInStack", true);
+    stack->setProperty("busy", true);
+    QVERIFY(QMetaObject::invokeMethod(back, "triggered"));
+    QCOMPARE(stack->property("currentPage").value<QObject *>(), page.data());
+    QCOMPARE(title->property("text").toString(), QStringLiteral("First"));
+    QVERIFY(!cover->property("navigationError").toString().isEmpty());
+    stack->setProperty("busy", false);
+    QVERIFY(QMetaObject::invokeMethod(back, "triggered"));
+    QCOMPARE(title->property("text").toString(), QString());
+    QVERIFY(!pdfPeek->property("visible").toBool());
+    QCOMPARE(stack->property("currentPage").value<QObject *>(), &projectsPage);
+    QObject *repeater = cover->findChild<QObject *>(QStringLiteral("coverProjects"));
+    QVERIFY(repeater);
+    QQuickItem *lastProject = nullptr;
+    QQuickItem *otherProject = nullptr;
+    QVERIFY(QMetaObject::invokeMethod(repeater, "itemAt", Q_RETURN_ARG(QQuickItem *, lastProject), Q_ARG(int, 0)));
+    QVERIFY(QMetaObject::invokeMethod(repeater, "itemAt", Q_RETURN_ARG(QQuickItem *, otherProject), Q_ARG(int, 1)));
+    QVERIFY(lastProject);
+    QVERIFY(otherProject);
+    QVERIFY(lastProject->property("color") != otherProject->property("color"));
+    QObject *forward = cover->findChild<QObject *>(QStringLiteral("coverShowEditor"));
+    QVERIFY(forward);
+    stack->setProperty("editorInStack", false);
+    QVERIFY(QMetaObject::invokeMethod(forward, "triggered"));
+    QCOMPARE(title->property("text").toString(), QStringLiteral("First"));
+    QCOMPARE(stack->property("currentPage").value<QObject *>(), page.data());
+    client.setCoverEditor(nullptr);
+    QCOMPARE(title->property("text").toString(), QString());
+}
+
+void AutoLoginTests::attachedEditorSurvivesNavigation()
+{
+    QTemporaryDir directory;
+    DraftStore drafts(directory.path());
+    FakePdfClient client;
+    QQmlEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("overleafClient"), &client);
+    engine.rootContext()->setContextProperty(QStringLiteral("draftStore"), &drafts);
+    QQmlComponent component(&engine);
+    component.setData(R"(
+        import QtQuick 2.0
+        import Sailfish.Silica 1.0
+        import "." as Pages
+        ApplicationWindow {
+            property var projectsPage
+            property var editorPage
+            property bool editorRetained: false
+            property var activePage: pageStack.currentPage
+            initialPage: Component { Page { objectName: "projectsPage" } }
+            Component {
+                id: editor
+                Page {
+                    property string projectId: "one"
+                    property string projectName: "First"
+                    property string coverSnippet: ""
+                    property string coverSnippetFile: ""
+                    property bool dirty: false
+                }
+            }
+            Pages.CoverPage { objectName: "testCover"; navigationStack: pageStack }
+            function openEditor() {
+                projectsPage = pageStack.currentPage
+                editorPage = pageStack.pushAttached(editor)
+                pageStack.navigateForward(PageStackAction.Immediate)
+                overleafClient.setCoverEditor(editorPage)
+                overleafClient.coverShowsProjects = false
+            }
+            function returnToProjects() {
+                pageStack.pop(projectsPage, PageStackAction.Immediate)
+                editorRetained = pageStack.nextPage(projectsPage) === editorPage
+            }
+        }
+    )", QUrl::fromLocalFile(QStringLiteral(AUTO_LOGIN_QML_PATH)));
+    QScopedPointer<QObject> window(component.create());
+    QVERIFY2(window, qPrintable(component.errorString()));
+    QVERIFY(QMetaObject::invokeMethod(window.data(), "openEditor"));
+    QVERIFY(window->property("editorPage").value<QObject *>());
+    QVERIFY(QMetaObject::invokeMethod(window.data(), "returnToProjects"));
+    QVERIFY(window->property("editorRetained").toBool());
+    QObject *cover = window->findChild<QObject *>(QStringLiteral("testCover"));
+    QVERIFY(cover);
+    client.setProperty("coverShowsProjects", true);
+    QObject *forward = cover->findChild<QObject *>(QStringLiteral("coverShowEditor"));
+    QVERIFY(forward);
+    QVERIFY(QMetaObject::invokeMethod(forward, "triggered"));
+    QCOMPARE(window->property("activePage").value<QObject *>(), window->property("editorPage").value<QObject *>());
+    QObject *back = cover->findChild<QObject *>(QStringLiteral("coverShowProjectsWithoutPdf"));
+    QVERIFY(back);
+    QVERIFY(QMetaObject::invokeMethod(back, "triggered"));
+    QCOMPARE(window->property("activePage").value<QObject *>(), window->property("projectsPage").value<QObject *>());
 }
 
 void AutoLoginTests::editorPersistsDraft()

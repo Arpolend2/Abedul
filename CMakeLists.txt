@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(ru.auroraos.OverleafClient VERSION 1.1.0 LANGUAGES C CXX)
+project(ru.auroraos.OverleafClient VERSION 1.2.0 LANGUAGES C CXX)
 
 find_package(Qt5 REQUIRED COMPONENTS Core Gui Network Qml Quick)
 find_package(PkgConfig REQUIRED)
@@ -176,6 +176,7 @@ add_custom_target(distfiles SOURCES
     qml/pages/WebLoginPage.qml
     qml/pages/WheelScroll.qml
     qml/pages/MouseNavigation.qml
+    qml/pages/OpenCachedPdf.qml
     qml/pages/SettingsPage.qml
 )
 

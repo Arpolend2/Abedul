@@ -4,6 +4,7 @@ An independent native Overleaf client for Aurora OS.
 
 - Sign in to Overleaf Cloud or a self-hosted server, browse projects and edit files.
 - Save and compile LaTeX with a PDF preview and two-way SyncTeX navigation.
+- The cover shows recent edits or the project list. Open the cached PDF in another app or download a ZIP of the saved server project to Downloads from the cover or editor menu.
 - Drafts are stored locally; conflicting server changes stop a save. Binary files open as temporary copies and are not uploaded.
 - The project file list is read-only. Live collaboration, sign-out and secure credential storage are not implemented.
 - SyncTeX uses the compiled server snapshot and does not support pages with a non-default crop box or offset media box.

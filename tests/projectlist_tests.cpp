@@ -3,6 +3,12 @@
 #include <QJsonObject>
 #include <QSettings>
 #include <QNetworkCookieJar>
+#include <QProcess>
+#include <QSslConfiguration>
+#include <QSslKey>
+#include <QSslSocket>
+#include <QTcpServer>
+#include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QUrlQuery>
 #include "overleafclient.h"
@@ -11,6 +17,52 @@
 #include "compileoutput.h"
 #include "socketprotocol.h"
 #include "synctex.h"
+
+class ArchiveServer : public QTcpServer
+{
+public:
+    QSslCertificate certificate;
+    QSslKey key;
+    QByteArray archive;
+    int archiveStatus = 200;
+    int archiveRequests = 0;
+    QByteArray archiveRequest;
+
+protected:
+    void incomingConnection(qintptr descriptor) override
+    {
+        QSslSocket *socket = new QSslSocket(this);
+        socket->setSocketDescriptor(descriptor);
+        socket->setLocalCertificate(certificate);
+        socket->setPrivateKey(key);
+        connect(socket, &QSslSocket::readyRead, this, [this, socket]() {
+            socket->setProperty("request", socket->property("request").toByteArray() + socket->readAll());
+            const QByteArray request = socket->property("request").toByteArray();
+            if (!request.contains("\r\n\r\n") || socket->property("replied").toBool())
+                return;
+            socket->setProperty("replied", true);
+            QByteArray body;
+            QByteArray status = "200 OK";
+            if (request.startsWith("GET /project HTTP/")) {
+                body = "<meta name=\"ol-csrfToken\" content=\"test\">";
+            } else if (request.startsWith("POST /api/project HTTP/")) {
+                body = "{\"projects\":[{\"id\":\"one\",\"name\":\"My Project\"}]}";
+            } else if (request.startsWith("GET /project/one/download/zip HTTP/")) {
+                ++archiveRequests;
+                archiveRequest = request;
+                body = archive;
+                if (archiveStatus == 503)
+                    status = "503 Service Unavailable";
+                else if (archiveStatus == 302)
+                    status = "302 Found";
+            }
+            socket->write("HTTP/1.1 " + status + "\r\nContent-Length: " + QByteArray::number(body.size())
+                          + "\r\nConnection: close\r\n\r\n" + body);
+            socket->disconnectFromHost();
+        });
+        socket->startServerEncryption();
+    }
+};
 
 class ProjectListTests : public QObject
 {
@@ -28,7 +80,94 @@ private slots:
     void createsTextOperations();
     void preservesHandshakeCookies();
     void remembersServerHistory();
+    void downloadsProjectArchive();
 };
+
+void ProjectListTests::downloadsProjectArchive()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QByteArray oldHome = qgetenv("HOME");
+    const QByteArray oldConfig = qgetenv("XDG_CONFIG_HOME");
+    struct RestoreEnvironment {
+        QByteArray home;
+        QByteArray config;
+        QSslConfiguration ssl;
+        ~RestoreEnvironment() {
+            qputenv("HOME", home);
+            qputenv("XDG_CONFIG_HOME", config);
+            QSslConfiguration::setDefaultConfiguration(ssl);
+        }
+    } restore{oldHome, oldConfig, QSslConfiguration::defaultConfiguration()};
+    qputenv("HOME", directory.path().toUtf8());
+    qputenv("XDG_CONFIG_HOME", QDir(directory.path()).filePath(QStringLiteral("config")).toUtf8());
+    const QString downloads = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+    if (!QDir::cleanPath(downloads).startsWith(QDir::cleanPath(directory.path()) + QLatin1Char('/')))
+        QSKIP("Cannot isolate Downloads for this platform");
+
+    const QString keyPath = QDir(directory.path()).filePath(QStringLiteral("key.pem"));
+    const QString certPath = QDir(directory.path()).filePath(QStringLiteral("cert.pem"));
+    const QStringList args{QStringLiteral("req"), QStringLiteral("-x509"), QStringLiteral("-newkey"),
+                           QStringLiteral("rsa:2048"), QStringLiteral("-nodes"), QStringLiteral("-keyout"),
+                           keyPath, QStringLiteral("-out"), certPath, QStringLiteral("-days"),
+                           QStringLiteral("1"), QStringLiteral("-subj"), QStringLiteral("/CN=localhost")};
+    QProcess openssl;
+    openssl.start(QStringLiteral("openssl"), args);
+    QVERIFY(openssl.waitForFinished());
+    QCOMPARE(openssl.exitCode(), 0);
+    QFile certFile(certPath);
+    QFile keyFile(keyPath);
+    QVERIFY(certFile.open(QIODevice::ReadOnly));
+    QVERIFY(keyFile.open(QIODevice::ReadOnly));
+    ArchiveServer server;
+    server.certificate = QSslCertificate(&certFile);
+    server.key = QSslKey(&keyFile, QSsl::Rsa);
+    QVERIFY(server.listen(QHostAddress::LocalHost));
+    QSslConfiguration trusted = restore.ssl;
+    trusted.setCaCertificates(QList<QSslCertificate>() << server.certificate);
+    QSslConfiguration::setDefaultConfiguration(trusted);
+
+    OverleafClient client;
+    QSignalSpy downloaded(&client, SIGNAL(archiveDownloaded(QString)));
+    QVERIFY(client.setServer(QStringLiteral("https://localhost:%1").arg(server.serverPort())));
+    client.finishBrowserLogin({QVariantMap{{QStringLiteral("name"), QStringLiteral("session")},
+                                           {QStringLiteral("value"), QStringLiteral("test")}}});
+    QTRY_VERIFY(!client.busy());
+    QVERIFY2(client.authenticated(), qPrintable(client.error()));
+    server.archive = QByteArray::fromHex("504b0506000000000000000000000000000000000000");
+    client.downloadProjectArchive(QStringLiteral("one"));
+    QVERIFY(client.archiveBusy());
+    client.downloadProjectArchive(QStringLiteral("one"));
+    QTRY_VERIFY(!client.archiveBusy());
+    QVERIFY2(client.archiveError().isEmpty(), qPrintable(client.archiveError()));
+    QCOMPARE(server.archiveRequests, 1);
+    QVERIFY(server.archiveRequest.toLower().contains("cookie: session=test"));
+    const QString saved = client.archivePath();
+    QCOMPARE(downloaded.size(), 1);
+    QCOMPARE(downloaded.first().first().toString(), saved);
+    QVERIFY(QFileInfo(saved).fileName().startsWith(QStringLiteral("My Project-")));
+    QFile file(saved);
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    QCOMPARE(file.readAll(), server.archive);
+    file.close();
+    QVERIFY(file.remove());
+
+    server.archive = "<html>not an archive</html>";
+    client.downloadProjectArchive(QStringLiteral("one"));
+    QTRY_VERIFY(!client.archiveBusy());
+    QVERIFY(!client.archiveError().isEmpty());
+    QVERIFY(client.archivePath().isEmpty());
+    QCOMPARE(QDir(downloads).entryList(QDir::Files).size(), 0);
+    QCOMPARE(downloaded.size(), 1);
+
+    server.archiveStatus = 503;
+    client.downloadProjectArchive(QStringLiteral("one"));
+    QTRY_VERIFY(!client.archiveBusy());
+    QVERIFY(client.archiveError().contains(QStringLiteral("503")));
+    QVERIFY(client.archivePath().isEmpty());
+    QCOMPARE(QDir(downloads).entryList(QDir::Files).size(), 0);
+    QCOMPARE(downloaded.size(), 1);
+}
 
 void ProjectListTests::parsesLists()
 {
@@ -289,5 +428,5 @@ void ProjectListTests::remembersServerHistory()
     QCoreApplication::setApplicationName(oldApplication);
 }
 
-QTEST_APPLESS_MAIN(ProjectListTests)
+QTEST_GUILESS_MAIN(ProjectListTests)
 #include "projectlist_tests.moc"

@@ -3,6 +3,7 @@ import Sailfish.Silica 1.0
 
 Page {
     id: page
+    objectName: "projectsPage"
     allowedOrientations: Orientation.All
     backNavigation: false
     property bool showArchived: false
@@ -18,6 +19,9 @@ Page {
     }
 
     function attachLastProject() {
+        var attached = pageStack.nextPage(page)
+        if (attached && attached.projectId === lastProjectId)
+            return
         for (var i = 0; i < overleafClient.projects.length; ++i) {
             var project = overleafClient.projects[i]
             if (project.id === lastProjectId && !project.trashed) {
@@ -36,7 +40,12 @@ Page {
         if (draftStore.error.length)
             navigationError = draftStore.error
     }
-    onStatusChanged: if (status === PageStatus.Active) attachTimer.restart()
+    onStatusChanged: {
+        if (status === PageStatus.Active) {
+            overleafClient.coverShowsProjects = true
+            attachTimer.restart()
+        }
+    }
     Timer {
         id: attachTimer
         interval: 0
@@ -93,10 +102,8 @@ Page {
             contentHeight: Theme.itemSizeMedium
             onClicked: {
                 page.rememberProject(modelData)
-                pageStack.push(Qt.resolvedUrl("EditorPage.qml"), {
-                    "projectId": modelData.id,
-                    "projectName": modelData.name
-                })
+                page.attachLastProject()
+                pageStack.navigateForward()
             }
             Label {
                 x: Theme.horizontalPageMargin

@@ -21,6 +21,12 @@ Page {
     property bool lastFileRestored: false
     property bool compileHintShown: false
     property string zoomTarget: "editor"
+    property string coverSnippet: ""
+    property string coverSnippetFile: ""
+    property bool coverHasEdits: false
+    property var coverPdfSnapshot: null
+    property string coverPdfError: ""
+    property int coverPdfRevision: 0
     property var pendingSyncSource: null
     property string syncRequestFile: ""
     property string syncRequestText: ""
@@ -53,6 +59,50 @@ Page {
                 : draftStore.save(overleafClient.server, projectId, editor.text)
             if (saved)
                 dirty = false
+        }
+    }
+
+    function updateCoverSnippet() {
+        var text = editor.text
+        var position = Math.max(0, Math.min(editor._editor.cursorPosition, text.length))
+        var line = text.substring(0, position).split("\n").length - 1
+        var lines = text.split("\n")
+        var start = Math.max(0, line - 2)
+        coverSnippet = lines.slice(start, start + 5).join("\n")
+        coverSnippetFile = currentFile
+    }
+
+    function scheduleCoverPdfCapture() {
+        ++coverPdfRevision
+        if (pdfLoader.item && pdfLoader.item.status === PdfDocument.Ready
+                && Qt.application.state === Qt.ApplicationActive)
+            coverPdfTimer.restart()
+    }
+
+    function captureCoverPdf() {
+        var view = pdfLoader.item
+        if (!view || view.status !== PdfDocument.Ready || view.width <= 0 || view.height <= 0)
+            return
+        var revision = coverPdfRevision
+        var pdfPath = overleafClient.pdfPath
+        var scale = 256 / Math.max(view.width, view.height)
+        var targetWidth = Math.max(1, Math.round(view.width * scale))
+        var targetHeight = Math.max(1, Math.round(view.height * scale))
+        var started = view.grabToImage(function(result) {
+            if (revision !== page.coverPdfRevision || pdfPath !== overleafClient.pdfPath
+                    || view !== pdfLoader.item)
+                return
+            page.coverPdfSnapshot = result
+            page.coverPdfError = ""
+        }, Qt.size(targetWidth, targetHeight))
+        if (!started)
+            coverPdfError = qsTr("Could not capture the PDF preview.")
+    }
+
+    function activateCover() {
+        if (started && typeof overleafClient.setCoverEditor === "function") {
+            overleafClient.setCoverEditor(page)
+            overleafClient.coverShowsProjects = false
         }
     }
 
@@ -169,10 +219,23 @@ Page {
         }
         restoreLastFile()
     }
-    Component.onCompleted: if (!deferOpen || status === PageStatus.Active) initializeEditor()
-    onStatusChanged: if (deferOpen && status === PageStatus.Active) initializeEditor()
+    Component.onCompleted: {
+        if (!deferOpen || status === PageStatus.Active)
+            initializeEditor()
+        if (status === PageStatus.Active)
+            activateCover()
+    }
+    onStatusChanged: {
+        if (status === PageStatus.Active) {
+            if (deferOpen)
+                initializeEditor()
+            activateCover()
+        }
+    }
     Component.onDestruction: {
         if (started) {
+            if (typeof overleafClient.setCoverEditor === "function" && overleafClient.coverEditor === page)
+                overleafClient.setCoverEditor(null)
             saveDraft()
             overleafClient.closeProjectPdf()
             overleafClient.closeProjectSource()
@@ -182,8 +245,19 @@ Page {
     Connections {
         target: Qt.application
         onStateChanged: {
-            if (Qt.application.state !== Qt.ApplicationActive)
+            if (Qt.application.state !== Qt.ApplicationActive) {
+                if (coverSnippetTimer.running) {
+                    coverSnippetTimer.stop()
+                    page.updateCoverSnippet()
+                }
                 page.saveDraft()
+                if (coverPdfTimer.running) {
+                    coverPdfTimer.stop()
+                    page.captureCoverPdf()
+                }
+            } else {
+                page.scheduleCoverPdfCapture()
+            }
         }
     }
     Connections {
@@ -195,6 +269,9 @@ Page {
             }
         }
         onPdfPathChanged: {
+            ++page.coverPdfRevision
+            page.coverPdfSnapshot = null
+            page.coverPdfError = ""
             if (!overleafClient.pdfPath.length) {
                 compileHintTimer.stop()
             } else {
@@ -211,6 +288,10 @@ Page {
         onSourceTextChanged: {
             if (!page.started || !overleafClient.sourcePath.length)
                 return
+            if (coverSnippetTimer.running) {
+                coverSnippetTimer.stop()
+                page.updateCoverSnippet()
+            }
             if (!draftStore.loadFile(overleafClient.server, page.projectId, overleafClient.sourcePath))
                 return
             page.initialized = false
@@ -233,6 +314,8 @@ Page {
             if (!draftStore.saveLastFile(overleafClient.server, page.projectId, page.currentFile))
                 page.actionError = draftStore.error
             page.initialized = true
+            if (!page.coverHasEdits)
+                page.updateCoverSnippet()
             if (page.pendingSyncSource && page.pendingSyncSource.path === page.currentFile) {
                 var location = page.pendingSyncSource
                 page.pendingSyncSource = null
@@ -294,6 +377,10 @@ Page {
         path: overleafClient.pdfPath
     }
 
+    OpenCachedPdf {
+        id: externalPdf
+    }
+
     DoubleTapMonitor {
         target: page.status === PageStatus.Active && page.started ? editor._editor : null
         onDoubleTapped: {
@@ -337,6 +424,16 @@ Page {
         id: saveTimer
         interval: 500
         onTriggered: page.saveDraft()
+    }
+    Timer {
+        id: coverSnippetTimer
+        interval: 0
+        onTriggered: page.updateCoverSnippet()
+    }
+    Timer {
+        id: coverPdfTimer
+        interval: 600
+        onTriggered: page.captureCoverPdf()
     }
 
     Timer {
@@ -392,6 +489,18 @@ Page {
                 enabled: !overleafClient.sourceBusy && !overleafClient.pdfBusy
                 onClicked: page.saveAndCompile()
             }
+            MenuItem {
+                objectName: "openCachedPdf"
+                text: qsTr("Open PDF in another app")
+                enabled: overleafClient.pdfPath.length > 0 && !overleafClient.pdfBusy
+                onClicked: externalPdf.open()
+            }
+            MenuItem {
+                objectName: "downloadProjectArchive"
+                text: qsTr("Download saved project ZIP")
+                enabled: !overleafClient.archiveBusy
+                onClicked: overleafClient.downloadProjectArchive(page.projectId)
+            }
         }
         Rectangle {
             id: header
@@ -434,9 +543,26 @@ Page {
                         width: parent.width - 2 * x
                         wrapMode: Text.Wrap
                         color: Theme.errorColor
-                        visible: draftStore.error.length > 0 || overleafClient.sourceError.length > 0 || page.actionError.length > 0
+                        visible: draftStore.error.length > 0 || overleafClient.sourceError.length > 0
+                                 || page.actionError.length > 0 || externalPdf.error.length > 0
+                                 || (overleafClient.archiveProject === page.projectId
+                                     && overleafClient.archiveError.length > 0)
                         text: draftStore.error.length ? draftStore.error
-                              : overleafClient.sourceError.length ? overleafClient.sourceError : page.actionError
+                              : overleafClient.sourceError.length ? overleafClient.sourceError
+                              : page.actionError.length ? page.actionError
+                              : externalPdf.error.length ? externalPdf.error
+                              : overleafClient.archiveProject === page.projectId ? overleafClient.archiveError : ""
+                    }
+                    Label {
+                        objectName: "archiveStatus"
+                        x: Theme.horizontalPageMargin
+                        width: parent.width - 2 * x
+                        wrapMode: Text.Wrap
+                        color: Theme.secondaryColor
+                        visible: overleafClient.archiveProject === page.projectId
+                                 && (overleafClient.archiveBusy || overleafClient.archivePath.length > 0)
+                        text: overleafClient.archiveBusy ? qsTr("Downloading project ZIP…")
+                              : qsTr("ZIP saved to %1").arg(overleafClient.archivePath)
                     }
                     Button {
                         anchors.horizontalCenter: parent.horizontalCenter
@@ -457,6 +583,8 @@ Page {
                         onTextChanged: {
                             if (page.initialized) {
                                 page.dirty = true
+                                page.coverHasEdits = true
+                                coverSnippetTimer.restart()
                                 saveTimer.restart()
                             }
                         }
@@ -554,6 +682,13 @@ Page {
                             pdfPath: overleafClient.pdfPath
                             fitToPage: true
                             geometry: pdfGeometry
+                            onContentXChanged: page.scheduleCoverPdfCapture()
+                            onContentYChanged: page.scheduleCoverPdfCapture()
+                            onZoomChanged: page.scheduleCoverPdfCapture()
+                            onWidthChanged: page.scheduleCoverPdfCapture()
+                            onHeightChanged: page.scheduleCoverPdfCapture()
+                            onStatusChanged: page.scheduleCoverPdfCapture()
+                            onContentChanged: page.scheduleCoverPdfCapture()
                             onClicked: page.zoomTarget = "pdf"
                             onSyncFailure: page.actionError = message
                             onSyncToSource: {

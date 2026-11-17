@@ -3,7 +3,7 @@
 
 Name:       ru.auroraos.OverleafClient
 Summary:    Native Overleaf client for Aurora OS
-Version:    1.1.0
+Version:    1.2.0
 Release:    1
 Group:      Qt/Qt
 License:    Proprietary and BSD-3-Clause and IJG
@@ -11,6 +11,7 @@ URL:        https://www.overleaf.com/
 Source0:    %{name}-%{version}.tar.bz2
 
 Requires:       sailfishsilica-qt5 >= 0.10.9
+Requires:       nemo-qml-plugin-notifications-qt5
 BuildRequires:  pkgconfig(auroraapp)
 BuildRequires:  pkgconfig(aurorawebview)
 BuildRequires:  pkgconfig(Qt5Core)
