@@ -1,5 +1,6 @@
 #include "projectlist.h"
 
+#include <QCoreApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -11,7 +12,7 @@ bool parseProjectList(const QByteArray &json, QVariantList *projects, QString *e
     QJsonParseError parseError;
     const QJsonDocument document = QJsonDocument::fromJson(json, &parseError);
     if (parseError.error != QJsonParseError::NoError) {
-        *error = QStringLiteral("Invalid project list JSON: %1").arg(parseError.errorString());
+        *error = QCoreApplication::translate("ProjectList", "Invalid project list JSON: %1").arg(parseError.errorString());
         return false;
     }
 
@@ -21,14 +22,14 @@ bool parseProjectList(const QByteArray &json, QVariantList *projects, QString *e
     } else if (document.isObject() && document.object().value(QStringLiteral("projects")).isArray()) {
         records = document.object().value(QStringLiteral("projects")).toArray();
     } else {
-        *error = QStringLiteral("Unexpected project list response");
+        *error = QCoreApplication::translate("ProjectList", "Unexpected project list response");
         return false;
     }
 
     QVariantList result;
     for (const QJsonValue &entry : records) {
         if (!entry.isObject()) {
-            *error = QStringLiteral("Invalid project entry");
+            *error = QCoreApplication::translate("ProjectList", "Invalid project entry");
             return false;
         }
         const QJsonObject project = entry.toObject();
@@ -41,7 +42,7 @@ bool parseProjectList(const QByteArray &json, QVariantList *projects, QString *e
         if (name.isEmpty())
             name = project.value(QStringLiteral("projectName")).toString();
         if (id.isEmpty() || name.isEmpty()) {
-            *error = QStringLiteral("Project is missing its ID or name");
+            *error = QCoreApplication::translate("ProjectList", "Project is missing its ID or name");
             return false;
         }
         QVariantMap item;

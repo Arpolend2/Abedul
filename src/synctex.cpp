@@ -1,5 +1,6 @@
 #include "synctex.h"
 
+#include <QCoreApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -13,7 +14,7 @@ bool syncTeXBuildFromCompile(const QByteArray &response, const QString &editorId
     *build = SyncTeXBuild();
     const QJsonDocument document = QJsonDocument::fromJson(response);
     if (!document.isObject() || !document.object().value(QStringLiteral("outputFiles")).isArray()) {
-        *error = QStringLiteral("The compile response has no SyncTeX build information.");
+        *error = QCoreApplication::translate("SyncTeX", "The compile response has no SyncTeX build information.");
         return false;
     }
     const QJsonObject result = document.object();
@@ -30,7 +31,7 @@ bool syncTeXBuildFromCompile(const QByteArray &response, const QString &editorId
         QStringLiteral("^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"));
     if (!buildPattern.match(build->buildId).hasMatch() || !editorPattern.match(editorId).hasMatch()) {
         *build = SyncTeXBuild();
-        *error = QStringLiteral("The server did not provide a usable SyncTeX build identifier.");
+        *error = QCoreApplication::translate("SyncTeX", "The server did not provide a usable SyncTeX build identifier.");
         return false;
     }
     build->editorId = editorId;
@@ -45,13 +46,13 @@ bool syncTeXResult(const QByteArray &response, bool toPdf, QVariantList *positio
     const QJsonDocument document = QJsonDocument::fromJson(response);
     const QJsonValue value = document.object().value(toPdf ? QStringLiteral("pdf") : QStringLiteral("code"));
     if (!document.isObject() || !value.isArray() || value.toArray().isEmpty()) {
-        *error = QStringLiteral("SyncTeX did not find a matching location.");
+        *error = QCoreApplication::translate("SyncTeX", "SyncTeX did not find a matching location.");
         return false;
     }
     QVariantList parsed;
     for (const QJsonValue &entry : value.toArray()) {
         if (!entry.isObject()) {
-            *error = QStringLiteral("The server returned an invalid SyncTeX location.");
+            *error = QCoreApplication::translate("SyncTeX", "The server returned an invalid SyncTeX location.");
             return false;
         }
         const QJsonObject position = entry.toObject();
@@ -61,7 +62,7 @@ bool syncTeXResult(const QByteArray &response, bool toPdf, QVariantList *positio
             const QJsonValue v = position.value(QStringLiteral("v"));
             if (!page.isDouble() || page.toDouble() < 1 || page.toDouble() != page.toInt()
                     || !h.isDouble() || !v.isDouble() || !qIsFinite(h.toDouble()) || !qIsFinite(v.toDouble())) {
-                *error = QStringLiteral("The server returned an invalid PDF location.");
+                *error = QCoreApplication::translate("SyncTeX", "The server returned an invalid PDF location.");
                 return false;
             }
         } else {
@@ -72,7 +73,7 @@ bool syncTeXResult(const QByteArray &response, bool toPdf, QVariantList *positio
                     || line.toDouble() < 1 || line.toDouble() != line.toInt()
                     || (!column.isUndefined() && (!column.isDouble()
                         || column.toDouble() < -1 || column.toDouble() != column.toInt()))) {
-                *error = QStringLiteral("The server returned an invalid source location.");
+                *error = QCoreApplication::translate("SyncTeX", "The server returned an invalid source location.");
                 return false;
             }
         }

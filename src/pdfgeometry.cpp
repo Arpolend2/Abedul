@@ -1,5 +1,6 @@
 #include "pdfgeometry.h"
 
+#include <QCoreApplication>
 #include <QFutureInterface>
 #include <QVariantMap>
 #include <pdftaskqueue.h>
@@ -20,7 +21,7 @@ public:
         QVariantList pages;
         FPDF_DOCUMENT doc = FPDF_LoadDocument(qUtf8Printable(m_path), nullptr);
         if (!doc) {
-            result.insert(QStringLiteral("error"), QStringLiteral("Could not read the PDF page geometry."));
+            result.insert(QStringLiteral("error"), QCoreApplication::translate("PdfGeometry", "Could not read the PDF page geometry."));
         } else {
             const int count = FPDF_GetPageCount(doc);
             for (int i = 0; i < count; ++i) {
@@ -30,7 +31,7 @@ public:
                         || size.width <= 0 || size.height <= 0) {
                     if (page)
                         FPDF_ClosePage(page);
-                    result.insert(QStringLiteral("error"), QStringLiteral("Could not read the PDF page geometry."));
+                    result.insert(QStringLiteral("error"), QCoreApplication::translate("PdfGeometry", "Could not read the PDF page geometry."));
                     break;
                 }
                 const int rotation = FPDFPage_GetRotation(page);
@@ -50,7 +51,7 @@ public:
             }
             FPDF_CloseDocument(doc);
             if (count < 1)
-                result.insert(QStringLiteral("error"), QStringLiteral("The PDF has no pages."));
+                result.insert(QStringLiteral("error"), QCoreApplication::translate("PdfGeometry", "The PDF has no pages."));
         }
         result.insert(QStringLiteral("pages"), pages);
         m_result.reportFinished(&result);

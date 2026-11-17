@@ -1,10 +1,24 @@
 cmake_minimum_required(VERSION 3.18)
-project(ru.auroraos.OverleafClient VERSION 1.2.1 LANGUAGES C CXX)
+project(ru.auroraos.OverleafClient VERSION 1.3.0 LANGUAGES C CXX)
 
 find_package(Qt5 REQUIRED COMPONENTS Core Gui Network Qml Quick)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(AURORA REQUIRED IMPORTED_TARGET auroraapp)
 pkg_check_modules(WEBVIEW REQUIRED IMPORTED_TARGET aurorawebview)
+
+find_program(LRELEASE_EXECUTABLE NAMES lrelease NO_CMAKE_FIND_ROOT_PATH)
+if(NOT LRELEASE_EXECUTABLE)
+    message(FATAL_ERROR "Qt lrelease is required to build translations")
+endif()
+set(ABEDUL_TRANSLATION "${CMAKE_CURRENT_BINARY_DIR}/translations/Abedul_ru.qm")
+add_custom_command(
+    OUTPUT "${ABEDUL_TRANSLATION}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/translations"
+    COMMAND "${LRELEASE_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/translations/Abedul_ru.ts"
+            -qm "${ABEDUL_TRANSLATION}"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/translations/Abedul_ru.ts"
+    VERBATIM)
+add_custom_target(abedul_translations ALL DEPENDS "${ABEDUL_TRANSLATION}")
 
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_CXX_STANDARD 11)
@@ -126,6 +140,8 @@ add_executable(${PROJECT_NAME}
     src/pdfgeometry.h
     src/doubletapmonitor.cpp
     src/doubletapmonitor.h
+    src/completionkeyfilter.cpp
+    src/completionkeyfilter.h
     src/socketprotocol.cpp
     src/socketprotocol.h
     src/realtimesocket.cpp
@@ -154,15 +170,17 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE TASK_PRIORITY_RATIO=10)
 set_target_properties(${PROJECT_NAME} PROPERTIES
     BUILD_RPATH "${CMAKE_BINARY_DIR}/vendor/PdfViewer/amberpdf;${CMAKE_BINARY_DIR}/pdfium/lib;${CMAKE_BINARY_DIR}/libjpeg-build"
     INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/share/${PROJECT_NAME}/lib")
-add_dependencies(${PROJECT_NAME} amberpdfqmlplugin)
+add_dependencies(${PROJECT_NAME} amberpdfqmlplugin abedul_translations)
 
 install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin)
 install(DIRECTORY qml DESTINATION share/${PROJECT_NAME})
+install(FILES "${ABEDUL_TRANSLATION}" DESTINATION share/${PROJECT_NAME}/translations)
 install(FILES ${PROJECT_NAME}.desktop DESTINATION share/applications)
 install(DIRECTORY icons/hicolor DESTINATION share/icons)
 
 add_custom_target(distfiles SOURCES
     README.md
+    translations/Abedul_ru.ts
     ${PROJECT_NAME}.desktop
     rpm/${PROJECT_NAME}.spec
     qml/OverleafClient.qml
@@ -209,18 +227,20 @@ if(BUILD_TESTS)
         src/latexhighlighter.cpp src/latexhighlighter.h
         src/draftstore.cpp src/draftstore.h
         src/pdfgeometry.cpp src/pdfgeometry.h
-        src/doubletapmonitor.cpp src/doubletapmonitor.h)
+        src/doubletapmonitor.cpp src/doubletapmonitor.h
+        src/completionkeyfilter.cpp src/completionkeyfilter.h)
     target_include_directories(autologin_tests PRIVATE src)
     target_include_directories(autologin_tests PRIVATE vendor/PdfViewer/amberpdf/src
         vendor/PdfViewer/amberpdf/src/tasks "${CMAKE_BINARY_DIR}/pdfium/include")
     target_link_directories(autologin_tests PRIVATE
         "${CMAKE_BINARY_DIR}/pdfium/lib" "${CMAKE_BINARY_DIR}/libjpeg-build")
     target_compile_definitions(autologin_tests PRIVATE TASK_PRIORITY_RATIO=10)
-    add_dependencies(autologin_tests amberpdfqmlplugin)
+    add_dependencies(autologin_tests amberpdfqmlplugin abedul_translations)
     set_target_properties(autologin_tests PROPERTIES
         BUILD_RPATH "${CMAKE_BINARY_DIR}/vendor/PdfViewer/amberpdf;${CMAKE_BINARY_DIR}/pdfium/lib;${CMAKE_BINARY_DIR}/libjpeg-build")
     target_compile_definitions(autologin_tests PRIVATE
-        AUTO_LOGIN_QML_PATH="${CMAKE_CURRENT_SOURCE_DIR}/qml/pages/AutoLogin.qml")
+        AUTO_LOGIN_QML_PATH="${CMAKE_CURRENT_SOURCE_DIR}/qml/pages/AutoLogin.qml"
+        ABEDUL_TRANSLATION_DIR="${CMAKE_CURRENT_BINARY_DIR}/translations")
     target_link_libraries(autologin_tests PRIVATE
         Qt5::Core Qt5::Gui Qt5::Network Qt5::Qml Qt5::Quick Qt5::Test amberpdf
         "${CMAKE_BINARY_DIR}/pdfium/lib/libpdfium.so")

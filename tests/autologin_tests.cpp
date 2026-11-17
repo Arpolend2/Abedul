@@ -13,6 +13,7 @@
 #include <QQuickRenderControl>
 #include <QWheelEvent>
 #include <QSettings>
+#include <QTranslator>
 #include <QTextBlock>
 #include <QTextDocument>
 #include <QTextLayout>
@@ -21,6 +22,8 @@
 #include "latexhighlighter.h"
 #include "pdfgeometry.h"
 #include "doubletapmonitor.h"
+#include "completionkeyfilter.h"
+#include "compileoutput.h"
 
 class FakeProjectClient : public QObject
 {
@@ -313,9 +316,11 @@ private slots:
     void loadsPdfGeometry();
     void automaticLoginOnlyAfterSuccessfulProjectLoad();
     void interfaceComponentsLoad();
+    void russianTranslations();
     void coverShowsProjectsAndRecentEdits();
     void opensProjectFilesByType();
     void editorPersistsDraft();
+    void completesLatexCommands();
     void editorScrollsLongDocuments();
     void projectViewFiltersArchived();
     void pdfPaneLoadsDocument();
@@ -344,6 +349,7 @@ void AutoLoginTests::initTestCase()
     qmlRegisterType<LatexHighlighter>("Abedul", 1, 0, "LatexHighlighter");
     qmlRegisterType<PdfGeometry>("Abedul", 1, 0, "PdfGeometry");
     qmlRegisterType<DoubleTapMonitor>("Abedul", 1, 0, "DoubleTapMonitor");
+    qmlRegisterType<CompletionKeyFilter>("Abedul", 1, 0, "CompletionKeyFilter");
 }
 
 void AutoLoginTests::doubleTapRespectsClipping()
@@ -474,6 +480,41 @@ void AutoLoginTests::interfaceComponentsLoad()
     }
     QQmlComponent window(&engine, autoLoginUrl.resolved(QUrl(QStringLiteral("../OverleafClient.qml"))));
     QVERIFY2(window.isReady(), qPrintable(window.errorString()));
+}
+
+void AutoLoginTests::russianTranslations()
+{
+    QTranslator translator;
+    QVERIFY(translator.load(QLocale(QStringLiteral("ru_RU")), QStringLiteral("Abedul"),
+                            QStringLiteral("_"), QStringLiteral(ABEDUL_TRANSLATION_DIR)));
+    QVERIFY(QCoreApplication::installTranslator(&translator));
+    {
+        QTemporaryDir directory;
+        DraftStore drafts(directory.path());
+        FakePdfClient client;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("overleafClient"), &client);
+        engine.rootContext()->setContextProperty(QStringLiteral("draftStore"), &drafts);
+        const QUrl base = QUrl::fromLocalFile(QStringLiteral(AUTO_LOGIN_QML_PATH));
+        QQmlComponent component(&engine, base.resolved(QUrl(QStringLiteral("EditorPage.qml"))));
+        QScopedPointer<QObject> page(component.create());
+        QVERIFY2(page, qPrintable(component.errorString()));
+        QObject *save = page->findChild<QObject *>(QStringLiteral("saveAndCompile"));
+        QVERIFY(save);
+        QCOMPARE(save->property("text").toString(), QString::fromUtf8("Сохранить и скомпилировать"));
+        QByteArray payload;
+        QString error;
+        QVERIFY(!compileRequestBody(QString(), &payload, &error));
+        QCOMPARE(error, QString::fromUtf8("Выберите корректный главный документ."));
+        OverleafClient realClient;
+        QVERIFY(!realClient.setServer(QStringLiteral("http://example.org")));
+        QCOMPARE(realClient.error(), QString::fromUtf8("Введите HTTPS-адрес сервера без пути."));
+        QCOMPARE(QCoreApplication::translate("OverleafClient", "Project ZIP downloaded"),
+                 QString::fromUtf8("ZIP-архив проекта загружен"));
+    }
+    QVERIFY(QCoreApplication::removeTranslator(&translator));
+    QCOMPARE(QCoreApplication::translate("EditorPage", "Save and compile"),
+             QStringLiteral("Save and compile"));
 }
 
 void AutoLoginTests::coverShowsProjectsAndRecentEdits()
@@ -747,6 +788,148 @@ void AutoLoginTests::editorPersistsDraft()
     QTRY_VERIFY(!page->property("dirty").toBool());
     QVERIFY(drafts.load(client.server(), QStringLiteral("test")));
     QCOMPARE(drafts.text(), QStringLiteral("\\section{Test}"));
+}
+
+void AutoLoginTests::completesLatexCommands()
+{
+    QTemporaryDir directory;
+    DraftStore drafts(directory.path());
+    FakePdfClient client;
+    QQuickView view;
+    view.rootContext()->setContextProperty(QStringLiteral("overleafClient"), &client);
+    view.rootContext()->setContextProperty(QStringLiteral("draftStore"), &drafts);
+    view.setResizeMode(QQuickView::SizeRootObjectToView);
+    view.resize(600, 800);
+    const QUrl base = QUrl::fromLocalFile(QStringLiteral(AUTO_LOGIN_QML_PATH));
+    view.setSource(base.resolved(QUrl(QStringLiteral("EditorPage.qml"))));
+    QVERIFY2(view.status() == QQuickView::Ready, qPrintable(view.errors().isEmpty()
+             ? QString() : view.errors().first().toString()));
+    QQuickItem *page = view.rootObject();
+    page->setVisible(true);
+    QObject *editor = page->findChild<QObject *>(QStringLiteral("draftEditor"));
+    QVERIFY(editor);
+    page->setProperty("currentFile", QStringLiteral("/main.tex"));
+    page->setProperty("initialized", true);
+    editor->setProperty("text", QStringLiteral("\\beg"));
+    QQuickItem *input = qobject_cast<QQuickItem *>(editor->property("_editor").value<QObject *>());
+    QVERIFY(input);
+    input->forceActiveFocus();
+    input->setProperty("cursorPosition", 4);
+    QCOMPARE(page->property("latexCompletion").toString(), QStringLiteral("in{}"));
+    QQuickItem *hint = page->findChild<QQuickItem *>(QStringLiteral("latexCompletionHint"));
+    QVERIFY(hint);
+    QTRY_VERIFY(hint->isVisible());
+    QTRY_VERIFY(hint->width() > 0);
+    QVERIFY(hint->height() > 0);
+    QObject *shortcut = page->findChild<QObject *>(QStringLiteral("latexCompletionKeyFilter"));
+    QVERIFY(shortcut);
+    QVERIFY(shortcut->property("enabled").toBool());
+    QKeyEvent tab(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+    QCoreApplication::sendEvent(&view, &tab);
+    QCOMPARE(input->property("text").toString(), QStringLiteral("\\begin{}"));
+    QCOMPARE(input->property("cursorPosition").toInt(), 7);
+    QVERIFY(page->property("dirty").toBool());
+
+    editor->setProperty("text", QStringLiteral("  \\eqn"));
+    input->setProperty("cursorPosition", 6);
+    QCOMPARE(hint->property("text").toString(), QStringLiteral(" -> \\begin{eqnarray}..."));
+    QKeyEvent snippetTab(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+    QCoreApplication::sendEvent(input, &snippetTab);
+    QCOMPARE(input->property("text").toString(),
+             QStringLiteral("  \\begin{eqnarray}\n      \n  \\end{eqnarray}"));
+    QCOMPARE(input->property("cursorPosition").toInt(),
+             QStringLiteral("  \\begin{eqnarray}\n      ").length());
+    QVERIFY(QMetaObject::invokeMethod(input, "undo"));
+    QCOMPARE(input->property("text").toString(), QStringLiteral("  \\eqn"));
+
+    const QList<QPair<QString, QString>> snippets = {
+        {QStringLiteral("\\equ"), QStringLiteral("equation")},
+        {QStringLiteral("\\equation"), QStringLiteral("equation")},
+        {QStringLiteral("\\tab"), QStringLiteral("tabular")},
+        {QStringLiteral("\\tabular"), QStringLiteral("tabular")},
+        {QStringLiteral("\\fig"), QStringLiteral("figure")},
+        {QStringLiteral("\\figure"), QStringLiteral("figure")},
+        {QStringLiteral("\\align"), QStringLiteral("align")},
+        {QStringLiteral("\\itemize"), QStringLiteral("itemize")},
+        {QStringLiteral("\\enumerate"), QStringLiteral("enumerate")}
+    };
+    for (const auto &snippet : snippets) {
+        editor->setProperty("text", snippet.first);
+        input->setProperty("cursorPosition", snippet.first.length());
+        QVERIFY2(shortcut->property("enabled").toBool(), qPrintable(snippet.first));
+        QVERIFY(hint->property("text").toString().contains(snippet.second));
+        QKeyEvent key(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+        QCoreApplication::sendEvent(&view, &key);
+        const QString extra = snippet.second == QStringLiteral("tabular") ? QStringLiteral("{c}") : QString();
+        const QString opening = QStringLiteral("\\begin{%1}%2\n    ").arg(snippet.second, extra);
+        QCOMPARE(input->property("text").toString(),
+                 opening + QStringLiteral("\n\\end{%1}").arg(snippet.second));
+        QCOMPARE(input->property("cursorPosition").toInt(), opening.length());
+        QVERIFY(QMetaObject::invokeMethod(input, "undo"));
+        QCOMPARE(input->property("text").toString(), snippet.first);
+    }
+
+    editor->setProperty("text", QStringLiteral("\\begin{eqn}"));
+    input->setProperty("cursorPosition", 10);
+    QCOMPARE(page->property("latexCompletion").toString(), QStringLiteral("array"));
+    QKeyEvent environmentTab(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+    QCoreApplication::sendEvent(input, &environmentTab);
+    QCOMPARE(input->property("text").toString(), QStringLiteral("\\begin{eqnarray}"));
+    QCOMPARE(input->property("cursorPosition").toInt(), 16);
+
+    editor->setProperty("text", QStringLiteral("% \\beg"));
+    input->setProperty("cursorPosition", 6);
+    QCOMPARE(page->property("latexCompletion").toString(), QString());
+    editor->setProperty("text", QStringLiteral("\\\\beg"));
+    input->setProperty("cursorPosition", 5);
+    QCOMPARE(page->property("latexCompletion").toString(), QString());
+    editor->setProperty("text", QStringLiteral("\\beg trailing"));
+    input->setProperty("cursorPosition", 4);
+    QCOMPARE(page->property("latexCompletion").toString(), QStringLiteral("in{}"));
+    QQuickItem *popup = page->findChild<QQuickItem *>(QStringLiteral("latexCompletionPopup"));
+    QVERIFY(popup);
+    QVERIFY(popup->isVisible());
+    QKeyEvent inlineTab(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+    QCoreApplication::sendEvent(&view, &inlineTab);
+    QCOMPARE(input->property("text").toString(), QStringLiteral("\\begin{} trailing"));
+    editor->setProperty("text", QStringLiteral("\\sec{Title}"));
+    input->setProperty("cursorPosition", 4);
+    QCOMPARE(page->property("latexCompletion").toString(), QStringLiteral("tion"));
+    QKeyEvent braceTab(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+    QCoreApplication::sendEvent(&view, &braceTab);
+    QCOMPARE(input->property("text").toString(), QStringLiteral("\\section{Title}"));
+    editor->setProperty("text", QStringLiteral("\\"));
+    input->setProperty("cursorPosition", 1);
+    QVERIFY(!page->property("latexCompletion").toString().isEmpty());
+    editor->setProperty("text", QStringLiteral("\\a"));
+    input->setProperty("cursorPosition", 2);
+    QVERIFY(!page->property("latexCompletion").toString().isEmpty());
+    editor->setProperty("text", QStringLiteral("\\in"));
+    input->setProperty("cursorPosition", 3);
+    QCOMPARE(page->property("latexCompletion").toString(), QString());
+    editor->setProperty("text", QStringLiteral("\\unknowncommand"));
+    input->setProperty("cursorPosition", 15);
+    QCOMPARE(page->property("latexCompletion").toString(), QString());
+    QVERIFY(!hint->isVisible());
+    QVERIFY(!shortcut->property("enabled").toBool());
+    editor->setProperty("text", QStringLiteral("\\begin{unknown}"));
+    input->setProperty("cursorPosition", 14);
+    QVERIFY(!hint->isVisible());
+    QVERIFY(!popup->isVisible());
+    QVERIFY(!shortcut->property("enabled").toBool());
+    editor->setProperty("text", QStringLiteral("\\beg"));
+    QVERIFY(QMetaObject::invokeMethod(input, "select", Q_ARG(int, 1), Q_ARG(int, 4)));
+    QCOMPARE(page->property("latexCompletion").toString(), QString());
+    QVERIFY(QMetaObject::invokeMethod(input, "deselect"));
+    page->setProperty("currentFile", QStringLiteral("/refs.bib"));
+    input->setProperty("cursorPosition", 4);
+    QCOMPARE(page->property("latexCompletion").toString(), QStringLiteral("in{}"));
+    page->setProperty("currentFile", QStringLiteral("/notes.txt"));
+    QCOMPARE(page->property("latexCompletion").toString(), QString());
+    page->setProperty("currentFile", QStringLiteral("/main.tex"));
+    editor->setProperty("text", QStringLiteral("ordinary"));
+    input->setProperty("cursorPosition", 8);
+    QVERIFY(!shortcut->property("enabled").toBool());
 }
 
 void AutoLoginTests::editorScrollsLongDocuments()

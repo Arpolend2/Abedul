@@ -1,5 +1,6 @@
 #include "socketprotocol.h"
 
+#include <QCoreApplication>
 #include <QJsonValue>
 #include <QTextCodec>
 #include <QNetworkCookieJar>
@@ -79,7 +80,7 @@ static bool findProjectEntity(const QJsonObject &project, const QString &path, c
     if (wanted.isEmpty() || roots.size() != 1 || !roots.at(0).isObject()
             || !visitFolder(roots.at(0).toObject(), QString(), wanted, kind, id, 0) || id->isEmpty()) {
         id->clear();
-        *error = QStringLiteral("Could not find the selected file in the project.");
+        *error = QCoreApplication::translate("SocketProtocol", "Could not find the selected file in the project.");
         return false;
     }
     error->clear();
@@ -130,13 +131,13 @@ bool decodeJoinedDoc(const QJsonArray &args, QString *text, QString *error, qint
             || args.at(2).toDouble() != static_cast<qint64>(args.at(2).toDouble())
             || (args.size() > 5 && !args.at(5).isNull()
                 && args.at(5).toString() != QStringLiteral("sharejs-text-ot"))) {
-        *error = QStringLiteral("The server could not open this document or uses an unsupported format.");
+        *error = QCoreApplication::translate("SocketProtocol", "The server could not open this document or uses an unsupported format.");
         return false;
     }
     QStringList lines;
     for (const QJsonValue &line : args.at(1).toArray()) {
         if (!line.isString()) {
-            *error = QStringLiteral("Invalid document returned by server.");
+            *error = QCoreApplication::translate("SocketProtocol", "Invalid document returned by server.");
             return false;
         }
         const QString encoded = line.toString();
@@ -144,7 +145,7 @@ bool decodeJoinedDoc(const QJsonArray &args, QString *text, QString *error, qint
         QTextCodec::ConverterState state;
         const QString decoded = QTextCodec::codecForName("UTF-8")->toUnicode(bytes.constData(), bytes.size(), &state);
         if (state.invalidChars || state.remainingChars || QString::fromLatin1(bytes) != encoded) {
-            *error = QStringLiteral("Invalid text encoding in server document.");
+            *error = QCoreApplication::translate("SocketProtocol", "Invalid text encoding in server document.");
             return false;
         }
         lines.append(decoded);
@@ -152,24 +153,24 @@ bool decodeJoinedDoc(const QJsonArray &args, QString *text, QString *error, qint
     QString result = lines.join(QLatin1Char('\n'));
     if (args.size() > 3 && !args.at(3).isNull()) {
         if (!args.at(3).isArray()) {
-            *error = QStringLiteral("Invalid document updates from server.");
+            *error = QCoreApplication::translate("SocketProtocol", "Invalid document updates from server.");
             return false;
         }
         for (const QJsonValue &updateValue : args.at(3).toArray()) {
             const QJsonObject update = updateValue.toObject();
             if (!updateValue.isObject() || !update.value(QStringLiteral("op")).isArray()) {
-                *error = QStringLiteral("Invalid document update from server.");
+                *error = QCoreApplication::translate("SocketProtocol", "Invalid document update from server.");
                 return false;
             }
             for (const QJsonValue &opValue : update.value(QStringLiteral("op")).toArray()) {
                 const QJsonObject op = opValue.toObject();
                 if (!opValue.isObject() || !op.value(QStringLiteral("p")).isDouble()) {
-                    *error = QStringLiteral("Unsupported document update from server.");
+                    *error = QCoreApplication::translate("SocketProtocol", "Unsupported document update from server.");
                     return false;
                 }
                 const double position = op.value(QStringLiteral("p")).toDouble();
                 if (position < 0 || position > result.size() || position != static_cast<int>(position)) {
-                    *error = QStringLiteral("Invalid document update position.");
+                    *error = QCoreApplication::translate("SocketProtocol", "Invalid document update position.");
                     return false;
                 }
                 const int p = static_cast<int>(position);
@@ -178,12 +179,12 @@ bool decodeJoinedDoc(const QJsonArray &args, QString *text, QString *error, qint
                 } else if (op.value(QStringLiteral("d")).isString()) {
                     const QString removed = op.value(QStringLiteral("d")).toString();
                     if (result.mid(p, removed.size()) != removed) {
-                        *error = QStringLiteral("Document updates do not match the snapshot.");
+                        *error = QCoreApplication::translate("SocketProtocol", "Document updates do not match the snapshot.");
                         return false;
                     }
                     result.remove(p, removed.size());
                 } else if (!op.value(QStringLiteral("c")).isString()) {
-                    *error = QStringLiteral("Unsupported document update from server.");
+                    *error = QCoreApplication::translate("SocketProtocol", "Unsupported document update from server.");
                     return false;
                 }
             }
@@ -194,7 +195,7 @@ bool decodeJoinedDoc(const QJsonArray &args, QString *text, QString *error, qint
         const qint64 initialVersion = static_cast<qint64>(args.at(2).toDouble());
         const int updateCount = args.size() > 3 && args.at(3).isArray() ? args.at(3).toArray().size() : 0;
         if (initialVersion > 9007199254740991LL - updateCount) {
-            *error = QStringLiteral("Invalid document version.");
+            *error = QCoreApplication::translate("SocketProtocol", "Invalid document version.");
             return false;
         }
         *version = initialVersion + updateCount;

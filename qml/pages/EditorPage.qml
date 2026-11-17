@@ -24,6 +24,134 @@ Page {
     property string coverSnippet: ""
     property string coverSnippetFile: ""
     property bool coverHasEdits: false
+    readonly property var latexSuggestion: {
+        var input = editor._editor
+        if (!page.initialized || !editor.enabled || input.inputMethodComposing
+                || input.selectionStart !== input.selectionEnd
+                || (currentFile.length && !/\.(tex|sty|cls|bib)$/i.test(currentFile)))
+            return null
+        var text = input.text
+        var cursor = input.cursorPosition
+        var start = text.lastIndexOf("\n", cursor - 1) + 1
+        var line = text.substring(start, cursor)
+        var escaped = false
+        for (var i = 0; i < line.length; ++i) {
+            if (line.charAt(i) === "%" && !escaped)
+                return null
+            escaped = line.charAt(i) === "\\" ? !escaped : false
+        }
+        var snippetMatch = line.match(/^\s*\\([a-zA-Z]+)$/)
+        if (snippetMatch && (cursor === text.length || text.charAt(cursor) === "\n")) {
+            var snippets = {
+                eqn: "eqnarray", eqnarray: "eqnarray",
+                equ: "equation", equation: "equation",
+                tab: "tabular", tabular: "tabular",
+                fig: "figure", figure: "figure", table: "table",
+                align: "align", gather: "gather", itemize: "itemize",
+                enumerate: "enumerate", center: "center", quote: "quote",
+                verbatim: "verbatim"
+            }
+            if (snippets.hasOwnProperty(snippetMatch[1])) {
+                var name = snippets[snippetMatch[1]]
+                return { completion: "", display: " -> \\begin{" + name + "}...",
+                         snippet: true, environment: name, prefixLength: snippetMatch[1].length + 1 }
+            }
+        }
+        var environment = line.match(/\\(?:begin|end)\{([a-zA-Z*]*)$/)
+        if (environment) {
+            var environmentStart = line.length - environment[0].length
+            var previousSlashes = 0
+            for (i = environmentStart - 1; i >= 0 && line.charAt(i) === "\\"; --i)
+                ++previousSlashes
+            if (previousSlashes % 2)
+                return null
+            var closingBrace = text.charAt(cursor) === "}"
+            if (/[a-zA-Z*]/.test(text.charAt(cursor)) && cursor < text.length)
+                return null
+            var environments = [
+                "eqnarray", "equation", "align", "gather", "multline",
+                "document", "figure", "table", "tabular", "itemize",
+                "enumerate", "description", "abstract", "verbatim",
+                "array", "cases", "center", "flushleft", "flushright",
+                "matrix", "pmatrix", "bmatrix", "vmatrix", "theorem",
+                "proof", "quote", "quotation", "minipage", "tikzpicture"
+            ]
+            for (i = 0; i < environments.length; ++i) {
+                if (environments[i].indexOf(environment[1]) === 0) {
+                    var remaining = environments[i].substring(environment[1].length)
+                    var completion = remaining + (closingBrace ? "" : "}")
+                    if (completion.length)
+                        return { completion: completion, display: completion, snippet: false }
+                    return null
+                }
+            }
+            return null
+        }
+        var match = line.match(/\\[a-zA-Z]*$/)
+        if (!match)
+            return null
+        var commandStart = line.length - match[0].length
+        var precedingSlashes = 0
+        for (i = commandStart - 1; i >= 0 && line.charAt(i) === "\\"; --i)
+            ++precedingSlashes
+        if (precedingSlashes % 2)
+            return null
+        if (cursor < text.length && /[a-zA-Z]/.test(text.charAt(cursor)))
+            return null
+        var commands = [
+            "begin{}", "end{}", "section{}", "subsection{}", "subsubsection{}",
+            "chapter{}", "paragraph{}", "documentclass{}", "usepackage{}",
+            "textbf{}", "textit{}", "emph{}", "cite{}", "ref{}", "label{}",
+            "includegraphics{}", "frac{}{}", "sqrt{}", "item", "centering",
+            "caption{}", "footnote{}", "newline", "alpha", "beta", "gamma", "delta",
+            "epsilon", "varepsilon", "zeta", "eta", "theta", "vartheta", "iota",
+            "kappa", "lambda", "mu", "nu", "xi", "pi", "varpi", "rho", "varrho",
+            "sigma", "varsigma", "tau", "upsilon", "phi", "varphi", "chi", "psi",
+            "omega", "Gamma", "Delta", "Theta", "Lambda", "Xi", "Pi", "Sigma",
+            "Upsilon", "Phi", "Psi", "Omega", "sum", "prod", "int", "iint", "oint",
+            "lim", "sin", "cos", "tan", "log", "ln", "exp", "min", "max", "sup",
+            "inf", "infty", "partial", "nabla", "in", "notin", "subset", "subseteq",
+            "supset", "supseteq", "cup", "cap", "times", "cdot", "pm", "mp", "div",
+            "leq", "geq", "neq", "approx", "equiv", "sim", "propto",
+            "rightarrow", "leftarrow", "leftrightarrow", "Rightarrow", "Leftarrow",
+            "Leftrightarrow", "mapsto", "forall", "exists", "neg", "land", "lor",
+            "mathbb{}", "mathbf{}", "mathcal{}", "mathrm{}", "mathit{}", "mathsf{}",
+            "text{}", "texttt{}", "underline{}", "overline{}", "overbrace{}",
+            "underbrace{}", "vec{}", "hat{}", "bar{}", "dot{}", "ddot{}", "tilde{}",
+            "left", "right", "big", "Big", "bigg", "Bigg", "quad", "qquad",
+            "hspace{}", "vspace{}", "dots", "ldots", "cdots", "vdots", "ddots",
+            "limits", "displaystyle", "textstyle", "operatorname{}",
+            "newcommand{}{}", "renewcommand{}{}", "providecommand{}{}",
+            "newenvironment{}{}{}", "input{}", "include{}", "bibliography{}",
+            "bibliographystyle{}", "pageref{}", "url{}", "href{}{}", "title{}",
+            "author{}", "date{}", "maketitle", "tableofcontents", "appendix",
+            "part{}", "subparagraph{}", "clearpage", "newpage",
+            "hline", "cline{}", "multicolumn{}{}{}", "textwidth", "linewidth",
+            "raggedright", "raggedleft", "today", "LaTeX", "TeX"
+        ]
+        var prefix = match[0].substring(1)
+        for (i = 0; i < commands.length; ++i) {
+            if (commands[i].split("{")[0] === prefix) {
+                var exactSuffix = text.charAt(cursor) === "{" ? "" : commands[i].substring(prefix.length)
+                return exactSuffix.length
+                        ? { completion: exactSuffix, display: exactSuffix, snippet: false } : null
+            }
+        }
+        for (i = 0; i < commands.length; ++i) {
+            var name = commands[i].split("{")[0]
+            if (name.indexOf(prefix) !== 0)
+                continue
+            var candidate = commands[i]
+            if (text.charAt(cursor) === "{")
+                candidate = name
+            if (candidate.length > prefix.length) {
+                var suffix = candidate.substring(prefix.length)
+                return { completion: suffix, display: suffix, snippet: false }
+            }
+        }
+        return null
+    }
+    readonly property string latexCompletion: latexSuggestion ? latexSuggestion.completion : ""
     property var coverPdfSnapshot: null
     property string coverPdfError: ""
     property int coverPdfRevision: 0
@@ -587,6 +715,85 @@ Page {
                                 page.coverHasEdits = true
                                 coverSnippetTimer.restart()
                                 saveTimer.restart()
+                            }
+                        }
+                        Text {
+                            id: completionHint
+                            objectName: "latexCompletionHint"
+                            parent: editor._editor
+                            x: editor._editor.cursorRectangle.x
+                            y: editor._editor.cursorRectangle.y
+                            width: Math.max(0, parent.width - x)
+                            clip: true
+                            visible: editor._editor.activeFocus && !!page.latexSuggestion
+                                     && (editor._editor.cursorPosition === editor._editor.length
+                                         || editor._editor.text.charAt(editor._editor.cursorPosition) === "\n")
+                            text: page.latexSuggestion ? page.latexSuggestion.display : ""
+                            font: editor._editor.font
+                            color: editor.color
+                            opacity: 0.65
+                            z: 1
+                        }
+                        Rectangle {
+                            id: completionPopup
+                            objectName: "latexCompletionPopup"
+                            parent: codePane
+                            property point cursorPoint: {
+                                var scroll = codePane.contentY
+                                var cursor = editor._editor.cursorRectangle
+                                return editor._editor.mapToItem(codePane, cursor.x, cursor.y)
+                            }
+                            x: Math.max(0, Math.min(codePane.width - width, cursorPoint.x))
+                            y: cursorPoint.y + editor._editor.cursorRectangle.height + height <= codePane.height
+                               ? Math.max(0, cursorPoint.y + editor._editor.cursorRectangle.height)
+                               : Math.max(0, cursorPoint.y - height)
+                            width: Math.min(codePane.width, popupText.implicitWidth + Theme.paddingMedium * 2)
+                            height: popupText.implicitHeight + Theme.paddingSmall * 2
+                            z: 3
+                            color: page.editorBackground
+                            border.color: editor.color
+                            visible: editor._editor.activeFocus && !!page.latexSuggestion && !completionHint.visible
+                            Text {
+                                id: popupText
+                                anchors.centerIn: parent
+                                width: Math.min(implicitWidth, parent.width - Theme.paddingMedium * 2)
+                                clip: true
+                                text: page.latexSuggestion ? page.latexSuggestion.display : ""
+                                font: editor._editor.font
+                                color: editor.color
+                            }
+                        }
+                        CompletionKeyFilter {
+                            id: completionKeys
+                            objectName: "latexCompletionKeyFilter"
+                            target: editor._editor
+                            enabled: !!page.latexSuggestion
+                                     && (page.latexSuggestion.snippet || page.latexCompletion.length > 0)
+                            onAccepted: {
+                                var text = page.latexCompletion
+                                var position = editor._editor.cursorPosition
+                                if (page.latexSuggestion.snippet) {
+                                    var suggestion = page.latexSuggestion
+                                    var lineStart = editor._editor.text.lastIndexOf("\n", position - 1) + 1
+                                    var start = position - suggestion.prefixLength
+                                    var indent = editor._editor.text.substring(lineStart, start)
+                                    var opening = "\\begin{" + suggestion.environment + "}"
+                                            + (suggestion.environment === "tabular" ? "{c}" : "")
+                                            + "\n" + indent + "    "
+                                    if (completionKeys.replace(start, position,
+                                                               opening + "\n" + indent
+                                                               + "\\end{" + suggestion.environment + "}"))
+                                        editor._editor.cursorPosition = start + opening.length
+                                    else
+                                        page.actionError = qsTr("Could not insert the LaTeX completion.")
+                                    return
+                                }
+                                editor._editor.insert(position, text)
+                                var brace = text.indexOf("{")
+                                editor._editor.cursorPosition = brace >= 0
+                                        ? position + brace + 1
+                                        : position + text.length
+                                          + (editor._editor.text.charAt(position + text.length) === "}" ? 1 : 0)
                             }
                         }
                     }

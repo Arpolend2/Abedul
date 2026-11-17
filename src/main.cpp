@@ -3,6 +3,8 @@
 #include <QQmlContext>
 #include <QtQml>
 #include <QScopedPointer>
+#include <QLocale>
+#include <QTranslator>
 #include <auroraapp.h>
 #include <webenginecontext.h>
 
@@ -11,6 +13,7 @@
 #include "latexhighlighter.h"
 #include "pdfgeometry.h"
 #include "doubletapmonitor.h"
+#include "completionkeyfilter.h"
 
 int main(int argc, char **argv)
 {
@@ -19,9 +22,19 @@ int main(int argc, char **argv)
     application->setOrganizationName(QStringLiteral("ru.auroraos"));
     application->setApplicationName(QStringLiteral("OverleafClient"));
     application->setApplicationDisplayName(QStringLiteral("Abedul"));
+    QTranslator translator;
+    const QLocale locale = QLocale::system();
+    if (locale.language() == QLocale::Russian) {
+        const QString translations = Aurora::Application::pathTo(QStringLiteral("translations")).toLocalFile();
+        if (translator.load(locale, QStringLiteral("Abedul"), QStringLiteral("_"), translations))
+            application->installTranslator(&translator);
+        else
+            qWarning("Could not load Russian application translations");
+    }
     qmlRegisterType<LatexHighlighter>("Abedul", 1, 0, "LatexHighlighter");
     qmlRegisterType<PdfGeometry>("Abedul", 1, 0, "PdfGeometry");
     qmlRegisterType<DoubleTapMonitor>("Abedul", 1, 0, "DoubleTapMonitor");
+    qmlRegisterType<CompletionKeyFilter>("Abedul", 1, 0, "CompletionKeyFilter");
 
     OverleafClient client;
     DraftStore drafts;

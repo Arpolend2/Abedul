@@ -1,5 +1,6 @@
 #include "compileoutput.h"
 
+#include <QCoreApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -17,7 +18,7 @@ bool compileRequestBody(const QString &rootPath, QByteArray *body, QString *erro
             || path.contains(QChar::Null)
             || path.split(QLatin1Char('/')).contains(QStringLiteral(".."))
             || path.split(QLatin1Char('/')).contains(QStringLiteral("."))) {
-        *error = QStringLiteral("Select a valid main document.");
+        *error = QCoreApplication::translate("CompileOutput", "Select a valid main document.");
         return false;
     }
     QJsonObject payload{
@@ -53,17 +54,17 @@ bool compilePdfUrl(const QByteArray &response, const QUrl &server,
     QJsonParseError parseError;
     const QJsonDocument document = QJsonDocument::fromJson(response, &parseError);
     if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
-        *error = QStringLiteral("Invalid compile response.");
+        *error = QCoreApplication::translate("CompileOutput", "Invalid compile response.");
         return false;
     }
     const QJsonObject result = document.object();
     if (result.value(QStringLiteral("status")).toString() != QStringLiteral("success")) {
-        *error = QStringLiteral("The server could not compile the project.");
+        *error = QCoreApplication::translate("CompileOutput", "The server could not compile the project.");
         return false;
     }
     const QJsonValue files = result.value(QStringLiteral("outputFiles"));
     if (!files.isArray()) {
-        *error = QStringLiteral("The compile response has no output files.");
+        *error = QCoreApplication::translate("CompileOutput", "The compile response has no output files.");
         return false;
     }
     QString path;
@@ -78,14 +79,14 @@ bool compilePdfUrl(const QByteArray &response, const QUrl &server,
     const QUrl relative(path);
     if (path.isEmpty() || !relative.isValid() || !relative.isRelative()
             || relative.path().startsWith(QStringLiteral("//")) || relative.hasFragment()) {
-        *error = QStringLiteral("The compile response has an invalid PDF URL.");
+        *error = QCoreApplication::translate("CompileOutput", "The compile response has an invalid PDF URL.");
         return false;
     }
     QString relativePath = relative.path();
     while (relativePath.startsWith(QLatin1Char('/')))
         relativePath.remove(0, 1);
     if (relativePath.isEmpty() || relativePath.split(QLatin1Char('/')).contains(QStringLiteral(".."))) {
-        *error = QStringLiteral("The compile response has an invalid PDF path.");
+        *error = QCoreApplication::translate("CompileOutput", "The compile response has an invalid PDF path.");
         return false;
     }
     const QString cdn = result.value(QStringLiteral("pdfDownloadDomain")).toString();
@@ -97,7 +98,7 @@ bool compilePdfUrl(const QByteArray &response, const QUrl &server,
         if (!base.isValid() || base.scheme() != QStringLiteral("https")
                 || base.host().isEmpty() || !base.userInfo().isEmpty()
                 || base.hasQuery() || base.hasFragment()) {
-            *error = QStringLiteral("The server returned an invalid PDF download domain.");
+            *error = QCoreApplication::translate("CompileOutput", "The server returned an invalid PDF download domain.");
             return false;
         }
         *sendCookies = false;
