@@ -6,10 +6,14 @@
 #include "realtimesocket.h"
 
 #include <QDir>
+#include <QFileInfo>
+#include <QStandardPaths>
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QNetworkReply>
+#include <QUuid>
+#include <QtMath>
 #include <QNetworkCookieJar>
 #include <QNetworkRequest>
 #include <QVariantMap>
@@ -88,6 +92,8 @@ void OverleafClient::closeProjectSource()
     m_sourcePath.clear();
     m_sourceText.clear();
     m_savingSource = false;
+    m_openingExternal = false;
+    m_externalFile.reset();
     m_saveSubmitted = false;
     m_saveConcurrent = false;
     m_savePath.clear();
@@ -102,11 +108,38 @@ void OverleafClient::closeProjectSource()
 void OverleafClient::sourceFailed(const QString &message)
 {
     const bool uncertain = m_saveSubmitted;
+    const bool external = m_openingExternal;
     closeProjectSource();
+    if (external) {
+        m_filesError = message;
+        emit filesErrorChanged();
+        return;
+    }
     m_sourceError = uncertain
             ? message + tr(" The server may have saved the changes; the local draft was kept.")
             : message;
     emit sourceErrorChanged();
+}
+
+void OverleafClient::openProjectFileExternally(const QString &projectId, const QString &path)
+{
+    bool found = false;
+    for (const QVariant &entry : m_projectFiles) {
+        const QVariantMap file = entry.toMap();
+        if (file.value(QStringLiteral("type")).toString() == QStringLiteral("file")
+                && file.value(QStringLiteral("path")).toString() == path) {
+            found = true;
+            break;
+        }
+    }
+    if (projectId != m_filesProject || !found) {
+        m_filesError = tr("This file is not available in the current project.");
+        emit filesErrorChanged();
+        return;
+    }
+    m_filesError.clear();
+    emit filesErrorChanged();
+    startProjectSource(projectId, path, false, QString(), false, QString(), true);
 }
 
 void OverleafClient::openProjectSource(const QString &projectId, const QString &path)
@@ -129,7 +162,8 @@ void OverleafClient::completeSourceSave()
 }
 
 void OverleafClient::startProjectSource(const QString &projectId, const QString &path, bool saving,
-                                        const QString &base, bool baseKnown, const QString &text)
+                                        const QString &base, bool baseKnown, const QString &text,
+                                        bool openingExternal)
 {
     if (m_sourceBusy)
         return;
@@ -143,11 +177,17 @@ void OverleafClient::startProjectSource(const QString &projectId, const QString 
         }
     }
     if (!m_authenticated || !found || path.isEmpty()) {
-        m_sourceError = tr("This project document is not available in the current session.");
-        emit sourceErrorChanged();
+        if (openingExternal) {
+            m_filesError = tr("This project file is not available in the current session.");
+            emit filesErrorChanged();
+        } else {
+            m_sourceError = tr("This project document is not available in the current session.");
+            emit sourceErrorChanged();
+        }
         return;
     }
     closeProjectSource();
+    m_openingExternal = openingExternal;
     m_savingSource = saving;
     m_savePath = path;
     m_saveBase = base;
@@ -159,7 +199,7 @@ void OverleafClient::startProjectSource(const QString &projectId, const QString 
     const QString id = QString::fromLatin1(QUrl::toPercentEncoding(projectId));
     QNetworkReply *reply = m_network.get(request(QStringLiteral("/project/") + id));
     m_sourceReply = reply;
-    QTimer::singleShot(30000, this, [this, generation]() {
+    QTimer::singleShot(openingExternal ? 120000 : 30000, this, [this, generation]() {
         if (generation == m_sourceGeneration && m_sourceBusy)
             sourceFailed(tr("Timed out connecting to the project."));
     });
@@ -242,7 +282,7 @@ void OverleafClient::startProjectSource(const QString &projectId, const QString 
                     sourceFailed(tr("Real-time connection failed: %1").arg(error));
             });
             connect(socket, &RealtimeSocket::textMessageReceived, this,
-                    [this, socket, generation, path](const QString &message) {
+                    [this, socket, generation, path, projectId](const QString &message) {
                 if (generation != m_sourceGeneration || !m_sourceBusy)
                     return;
                 if (message == QStringLiteral("2::")) {
@@ -287,6 +327,20 @@ void OverleafClient::startProjectSource(const QString &projectId, const QString 
                     const QJsonObject response = args.isEmpty() ? QJsonObject() : args.at(0).toObject();
                     QString docId;
                     QString error;
+                    if (m_openingExternal) {
+                        if (response.value(QStringLiteral("protocolVersion")).toInt() != 2
+                                || !findProjectFile(response.value(QStringLiteral("project")).toObject(),
+                                                    path, &docId, &error)) {
+                            sourceFailed(error.isEmpty() ? tr("Unsupported real-time project protocol.") : error);
+                            return;
+                        }
+                        m_sourceSocket.clear();
+                        disconnect(socket, nullptr, this, nullptr);
+                        socket->abort();
+                        socket->deleteLater();
+                        downloadExternalFile(projectId, docId, path, generation);
+                        return;
+                    }
                     if (response.value(QStringLiteral("protocolVersion")).toInt() != 2
                             || !findProjectDoc(response.value(QStringLiteral("project")).toObject(), path, &docId, &error)) {
                         sourceFailed(error.isEmpty() ? tr("Unsupported real-time project protocol.") : error);
@@ -363,13 +417,70 @@ void OverleafClient::startProjectSource(const QString &projectId, const QString 
     });
 }
 
+void OverleafClient::downloadExternalFile(const QString &projectId, const QString &fileId,
+                                          const QString &path, quint64 generation)
+{
+    const QString name = QFileInfo(path).fileName();
+    const QString cache = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+    if (name.isEmpty() || name == QStringLiteral(".") || name == QStringLiteral("..")
+            || name.contains(QLatin1Char('\\')) || name.contains(QChar::Null)
+            || cache.isEmpty() || !QDir().mkpath(cache)) {
+        sourceFailed(tr("Could not prepare a temporary file."));
+        return;
+    }
+    m_externalFile.reset(new QTemporaryFile(
+        QDir(cache).filePath(QStringLiteral("Abedul-XXXXXX-") + name)));
+    if (!m_externalFile->open()) {
+        sourceFailed(tr("Could not create a temporary file: %1").arg(m_externalFile->errorString()));
+        return;
+    }
+    const QString project = QString::fromLatin1(QUrl::toPercentEncoding(projectId));
+    const QString file = QString::fromLatin1(QUrl::toPercentEncoding(fileId));
+    QNetworkReply *reply = m_network.get(request(QStringLiteral("/project/") + project
+                                                 + QStringLiteral("/file/") + file));
+    m_sourceReply = reply;
+    connect(reply, &QNetworkReply::readyRead, this, [this, reply, generation]() {
+        if (generation != m_sourceGeneration)
+            return;
+        const QByteArray data = reply->readAll();
+        if (m_externalFile->write(data) != data.size())
+            sourceFailed(tr("Could not write the file copy: %1").arg(m_externalFile->errorString()));
+    });
+    connect(reply, &QNetworkReply::finished, this, [this, reply, generation]() {
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const bool ok = reply->error() == QNetworkReply::NoError && status >= 200 && status < 300;
+        const QString detail = reply->errorString();
+        const QByteArray remaining = reply->readAll();
+        reply->deleteLater();
+        if (generation != m_sourceGeneration)
+            return;
+        m_sourceReply.clear();
+        if (!ok) {
+            sourceFailed(tr("Could not download the file (HTTP %1): %2").arg(status).arg(detail));
+            return;
+        }
+        if (m_externalFile->write(remaining) != remaining.size() || !m_externalFile->flush()) {
+            sourceFailed(tr("Could not write the file copy: %1").arg(m_externalFile->errorString()));
+            return;
+        }
+        const QString localPath = m_externalFile->fileName();
+        m_externalFile->close();
+        m_externalFile.take()->setParent(this);
+        closeProjectSource();
+        emit externalFileReady(QUrl::fromLocalFile(localPath));
+    });
+}
+
 void OverleafClient::closeProjectFiles()
 {
+    if (m_openingExternal)
+        closeProjectSource();
     ++m_filesGeneration;
     if (m_filesReply)
         m_filesReply->abort();
     m_filesReply.clear();
     m_projectFiles.clear();
+    m_filesProject.clear();
     m_filesError.clear();
     m_filesBusy = false;
     emit projectFilesChanged();
@@ -404,7 +515,7 @@ void OverleafClient::loadProjectFiles(const QString &projectId)
                                                 + QStringLiteral("/entities")));
     m_filesReply = reply;
     QTimer::singleShot(60000, reply, [reply]() { if (reply->isRunning()) reply->abort(); });
-    connect(reply, &QNetworkReply::finished, this, [this, reply, generation]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, generation, projectId]() {
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const bool ok = reply->error() == QNetworkReply::NoError && status >= 200 && status < 300;
         const QByteArray body = reply->readAll();
@@ -418,6 +529,7 @@ void OverleafClient::loadProjectFiles(const QString &projectId)
         if (!ok) {
             m_filesError = tr("Could not load project files (HTTP %1): %2").arg(status).arg(networkError);
         } else {
+            m_filesProject = projectId;
             QJsonParseError error;
             const QJsonDocument doc = QJsonDocument::fromJson(body, &error);
             const QJsonValue entities = doc.object().value(QStringLiteral("entities"));
@@ -460,6 +572,13 @@ void OverleafClient::setPdfBusy(bool busy)
 void OverleafClient::closeProjectPdf()
 {
     ++m_pdfGeneration;
+    ++m_syncGeneration;
+    if (m_syncReply)
+        m_syncReply->abort();
+    m_syncReply.clear();
+    m_syncBuild = SyncTeXBuild();
+    m_syncProject.clear();
+    m_syncRoot.clear();
     if (m_pdfReply)
         m_pdfReply->abort();
     m_pdfReply.clear();
@@ -491,7 +610,8 @@ void OverleafClient::compileProjectPdf(const QString &projectId, const QString &
     }
     QByteArray payload;
     QString payloadError;
-    if (!compileRequestBody(rootPath, &payload, &payloadError)) {
+    const QString editorId = QUuid::createUuid().toString().mid(1, 36);
+    if (!compileRequestBody(rootPath, &payload, &payloadError, editorId)) {
         setPdfError(payloadError);
         return;
     }
@@ -503,7 +623,7 @@ void OverleafClient::compileProjectPdf(const QString &projectId, const QString &
     QNetworkReply *reply = m_network.get(request(projectPath));
     m_pdfReply = reply;
     QTimer::singleShot(60000, reply, [reply]() { if (reply->isRunning()) reply->abort(); });
-    connect(reply, &QNetworkReply::finished, this, [this, reply, generation, projectPath, payload]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, generation, projectPath, projectId, editorId, rootPath, payload]() {
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const bool ok = reply->error() == QNetworkReply::NoError && status >= 200 && status < 300;
         const QByteArray html = reply->readAll();
@@ -530,7 +650,7 @@ void OverleafClient::compileProjectPdf(const QString &projectId, const QString &
         QTimer::singleShot(120000, compileReply, [compileReply]() {
             if (compileReply->isRunning()) compileReply->abort();
         });
-        connect(compileReply, &QNetworkReply::finished, this, [this, compileReply, generation]() {
+        connect(compileReply, &QNetworkReply::finished, this, [this, compileReply, generation, projectId, editorId, rootPath]() {
             const int status = compileReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
             const bool ok = compileReply->error() == QNetworkReply::NoError && status >= 200 && status < 300;
             const QByteArray response = compileReply->readAll();
@@ -545,12 +665,13 @@ void OverleafClient::compileProjectPdf(const QString &projectId, const QString &
                 setPdfBusy(false);
                 return;
             }
-            downloadProjectPdf(response, generation);
+            downloadProjectPdf(response, generation, projectId, editorId, rootPath);
         });
     });
 }
 
-void OverleafClient::downloadProjectPdf(const QByteArray &response, quint64 generation)
+void OverleafClient::downloadProjectPdf(const QByteArray &response, quint64 generation,
+                                        const QString &projectId, const QString &editorId, const QString &rootPath)
 {
     QUrl url;
     bool sendCookies = false;
@@ -560,6 +681,9 @@ void OverleafClient::downloadProjectPdf(const QByteArray &response, quint64 gene
         setPdfBusy(false);
         return;
     }
+    SyncTeXBuild syncBuild;
+    QString syncBuildError;
+    syncTeXBuildFromCompile(response, editorId, &syncBuild, &syncBuildError);
     QNetworkRequest req(url);
     req.setAttribute(QNetworkRequest::CookieLoadControlAttribute, QNetworkRequest::Manual);
     req.setAttribute(QNetworkRequest::CookieSaveControlAttribute, QNetworkRequest::Manual);
@@ -568,7 +692,7 @@ void OverleafClient::downloadProjectPdf(const QByteArray &response, quint64 gene
     QNetworkReply *reply = m_network.get(req);
     m_pdfReply = reply;
     QTimer::singleShot(60000, reply, [reply]() { if (reply->isRunning()) reply->abort(); });
-    connect(reply, &QNetworkReply::finished, this, [this, reply, generation]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, generation, projectId, syncBuild, rootPath]() {
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const bool ok = reply->error() == QNetworkReply::NoError && status >= 200 && status < 300;
         const QByteArray data = reply->readAll();
@@ -590,10 +714,88 @@ void OverleafClient::downloadProjectPdf(const QByteArray &response, quint64 gene
                 m_pdfPath = file->fileName();
                 file->close();
                 m_pdfFile.swap(file);
+                m_syncBuild = syncBuild;
+                m_syncProject = projectId;
+                m_syncRoot = rootPath;
                 emit pdfPathChanged();
             }
         }
         setPdfBusy(false);
+    });
+}
+
+void OverleafClient::syncSourceToPdf(const QString &projectId, const QString &path, int line, int column)
+{
+    QString file = path;
+    if (file.startsWith(QLatin1Char('/')))
+        file.remove(0, 1);
+    if (projectId != m_syncProject || m_syncBuild.buildId.isEmpty()) {
+        emit syncError(tr("SyncTeX is unavailable for this PDF. Compile the project again."));
+        return;
+    }
+    if (file.isEmpty() || file.startsWith(QLatin1Char('/')) || file.contains(QLatin1Char('\\'))
+            || file.contains(QChar::Null) || file.split(QLatin1Char('/')).contains(QStringLiteral(".."))
+            || file.split(QLatin1Char('/')).contains(QStringLiteral(".")) || line < 1 || column < 0) {
+        emit syncError(tr("Invalid source location."));
+        return;
+    }
+    QString root = m_syncRoot;
+    if (root.startsWith(QLatin1Char('/')))
+        root.remove(0, 1);
+    const int separator = root.lastIndexOf(QLatin1Char('/'));
+    if (separator > 0) {
+        const QString prefix = root.left(separator + 1);
+        if (file.startsWith(prefix))
+            file.insert(prefix.size(), QStringLiteral("./"));
+    }
+    syncRequest(syncTeXUrl(m_server, projectId, m_syncBuild, file, line, column), true);
+}
+
+void OverleafClient::syncPdfToSource(const QString &projectId, int page, double h, double v)
+{
+    if (projectId != m_syncProject || m_syncBuild.buildId.isEmpty()) {
+        emit syncError(tr("SyncTeX is unavailable for this PDF. Compile the project again."));
+        return;
+    }
+    if (page < 1 || !qIsFinite(h) || !qIsFinite(v)) {
+        emit syncError(tr("Invalid PDF location."));
+        return;
+    }
+    syncRequest(syncTeXUrl(m_server, projectId, m_syncBuild, page, h, v), false);
+}
+
+void OverleafClient::syncRequest(const QUrl &url, bool toPdf)
+{
+    ++m_syncGeneration;
+    if (m_syncReply)
+        m_syncReply->abort();
+    const quint64 generation = m_syncGeneration;
+    QNetworkReply *reply = m_network.get(request(url.toString(QUrl::FullyEncoded)));
+    m_syncReply = reply;
+    QTimer::singleShot(60000, reply, [reply]() { if (reply->isRunning()) reply->abort(); });
+    connect(reply, &QNetworkReply::finished, this, [this, reply, generation, toPdf]() {
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const bool ok = reply->error() == QNetworkReply::NoError && status >= 200 && status < 300;
+        const QByteArray response = reply->readAll();
+        const QString detail = reply->errorString();
+        reply->deleteLater();
+        if (generation != m_syncGeneration)
+            return;
+        m_syncReply.clear();
+        if (!ok) {
+            emit syncError(tr("SyncTeX request failed (HTTP %1): %2").arg(status).arg(detail));
+            return;
+        }
+        QVariantList positions;
+        QString error;
+        if (!syncTeXResult(response, toPdf, &positions, &error)) {
+            emit syncError(error);
+            return;
+        }
+        if (toPdf)
+            emit syncPdfPositions(positions);
+        else
+            emit syncSourcePositions(positions);
     });
 }
 
@@ -630,13 +832,6 @@ bool OverleafClient::setServer(const QString &address)
     closeProjectSource();
     m_server = url;
     m_server.setPath(QString());
-    m_rememberedServer = m_server.toString();
-    m_rememberedServers.removeAll(m_rememberedServer);
-    m_rememberedServers.prepend(m_rememberedServer);
-    QSettings settings;
-    settings.setValue(QStringLiteral("lastServer"), m_rememberedServer);
-    settings.setValue(QStringLiteral("servers"), m_rememberedServers);
-    settings.sync();
     m_cookieHeader.clear();
     m_csrf.clear();
     m_projects.clear();
@@ -646,10 +841,37 @@ bool OverleafClient::setServer(const QString &address)
     }
     emit projectsChanged();
     emit serverChanged();
+    setError(QString());
+    return true;
+}
+
+bool OverleafClient::confirmServerConnection(const QUrl &url, int httpStatusCode)
+{
+    if (m_server.isEmpty() || httpStatusCode < 200 || httpStatusCode >= 300
+            || !url.isValid() || !url.userInfo().isEmpty()
+            || url.scheme() != m_server.scheme()
+            || url.host() != m_server.host()
+            || url.port(443) != m_server.port(443))
+        return false;
+    const QString server = m_server.toString();
+    if (server == m_rememberedServer && !m_rememberedServers.isEmpty()
+            && m_rememberedServers.first() == server)
+        return true;
+    QStringList servers = m_rememberedServers;
+    servers.removeAll(server);
+    servers.prepend(server);
+    QSettings settings;
+    settings.setValue(QStringLiteral("lastServer"), server);
+    settings.setValue(QStringLiteral("servers"), servers);
+    settings.sync();
+    if (settings.status() != QSettings::NoError) {
+        setError(tr("Could not remember the server address."));
+        return false;
+    }
+    m_rememberedServer = server;
+    m_rememberedServers = servers;
     emit rememberedServerChanged();
     emit rememberedServersChanged();
-    setError(settings.status() == QSettings::NoError
-             ? QString() : tr("Could not remember the server address."));
     return true;
 }
 

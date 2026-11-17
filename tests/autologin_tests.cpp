@@ -9,6 +9,7 @@
 #include <QPdfWriter>
 #include <QQuickItem>
 #include <QQuickView>
+#include <QQuickWindow>
 #include <QQuickRenderControl>
 #include <QWheelEvent>
 #include <QSettings>
@@ -18,6 +19,8 @@
 #include "draftstore.h"
 #include "overleafclient.h"
 #include "latexhighlighter.h"
+#include "pdfgeometry.h"
+#include "doubletapmonitor.h"
 
 class FakeProjectClient : public QObject
 {
@@ -55,6 +58,37 @@ signals:
     void busyChanged();
 private:
     bool m_busy = false;
+};
+
+class FakeFileClient : public QObject
+{
+    Q_OBJECT
+    Q_PROPERTY(QVariantList projectFiles READ projectFiles CONSTANT)
+    Q_PROPERTY(QString filesError READ filesError CONSTANT)
+    Q_PROPERTY(bool filesBusy READ filesBusy CONSTANT)
+    Q_PROPERTY(bool sourceBusy MEMBER sourceBusy NOTIFY sourceBusyChanged)
+public:
+    QVariantList projectFiles() const { return QVariantList(); }
+    QString filesError() const { return QString(); }
+    bool filesBusy() const { return false; }
+    bool sourceBusy = false;
+    QString openedPath;
+    QString openedProject;
+    Q_INVOKABLE void loadProjectFiles(const QString &) {}
+    Q_INVOKABLE void closeProjectFiles() {}
+    Q_INVOKABLE void openProjectFileExternally(const QString &project, const QString &path)
+    { openedProject = project; openedPath = path; }
+signals:
+    void sourceBusyChanged();
+    void externalFileReady(const QUrl &url);
+};
+
+class FakeFileEditor : public QObject
+{
+    Q_OBJECT
+public:
+    QString openedPath;
+    Q_INVOKABLE bool openProjectFile(const QString &path) { openedPath = path; return true; }
 };
 
 class FakePageStack : public QObject
@@ -150,6 +184,9 @@ signals:
     void editorFontScaleChanged();
     void sourceTextChanged();
     void sourceSaved(const QString &path, const QString &text);
+    void syncError(const QString &message);
+    void syncPdfPositions(const QVariantList &positions);
+    void syncSourcePositions(const QVariantList &positions);
 private:
     QString m_path;
     QString m_sourcePath;
@@ -236,8 +273,11 @@ class AutoLoginTests : public QObject
     Q_OBJECT
 private slots:
     void initTestCase();
+    void doubleTapRespectsClipping();
+    void loadsPdfGeometry();
     void automaticLoginOnlyAfterSuccessfulProjectLoad();
     void interfaceComponentsLoad();
+    void opensProjectFilesByType();
     void editorPersistsDraft();
     void editorScrollsLongDocuments();
     void projectViewFiltersArchived();
@@ -264,10 +304,65 @@ private slots:
 void AutoLoginTests::initTestCase()
 {
     qmlRegisterType<LatexHighlighter>("Abedul", 1, 0, "LatexHighlighter");
+    qmlRegisterType<PdfGeometry>("Abedul", 1, 0, "PdfGeometry");
+    qmlRegisterType<DoubleTapMonitor>("Abedul", 1, 0, "DoubleTapMonitor");
+}
+
+void AutoLoginTests::doubleTapRespectsClipping()
+{
+    QQuickWindow window;
+    QQuickItem clip(window.contentItem());
+    clip.setSize(QSizeF(50, 50));
+    clip.setClip(true);
+    QQuickItem target(&clip);
+    target.setSize(QSizeF(100, 100));
+    DoubleTapMonitor monitor;
+    monitor.setTarget(&target);
+    QSignalSpy spy(&monitor, SIGNAL(doubleTapped(qreal,qreal)));
+
+    QMouseEvent inside(QEvent::MouseButtonDblClick, QPointF(20, 20),
+                       Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(&window, &inside);
+    QCOMPARE(spy.count(), 1);
+    QMouseEvent clipped(QEvent::MouseButtonDblClick, QPointF(75, 20),
+                        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(&window, &clipped);
+    QCOMPARE(spy.count(), 1);
+}
+
+void AutoLoginTests::loadsPdfGeometry()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path = QDir(directory.path()).filePath(QStringLiteral("geometry.pdf"));
+    {
+        QPdfWriter writer(path);
+        QPainter painter(&writer);
+        QVERIFY(painter.isActive());
+        painter.drawText(100, 100, QStringLiteral("Geometry"));
+    }
+    PdfGeometry geometry;
+    geometry.setPath(path);
+    QTRY_VERIFY(geometry.ready() || !geometry.error().isEmpty());
+    QVERIFY2(geometry.ready(), qPrintable(geometry.error()));
+    const QVariantMap page = geometry.page(0);
+    QVERIFY(page.value(QStringLiteral("width")).toDouble() > 0);
+    QVERIFY(page.value(QStringLiteral("height")).toDouble() > 0);
+    QCOMPARE(page.value(QStringLiteral("rotation")).toInt(), 0);
+    QVERIFY(page.value(QStringLiteral("supported")).toBool());
 }
 
 void AutoLoginTests::automaticLoginOnlyAfterSuccessfulProjectLoad()
 {
+    QTemporaryDir settingsDirectory;
+    QVERIFY(settingsDirectory.isValid());
+    const QSettings::Format originalFormat = QSettings::defaultFormat();
+    const QString originalOrganization = QCoreApplication::organizationName();
+    const QString originalApplication = QCoreApplication::applicationName();
+    QCoreApplication::setOrganizationName(QStringLiteral("AbedulTest"));
+    QCoreApplication::setApplicationName(QStringLiteral("AutoLogin"));
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory.path());
     QQmlEngine engine;
     QQmlComponent component(&engine, QUrl::fromLocalFile(QStringLiteral(AUTO_LOGIN_QML_PATH)));
     QVERIFY2(component.isReady(), qPrintable(component.errorString()));
@@ -282,9 +377,18 @@ void AutoLoginTests::automaticLoginOnlyAfterSuccessfulProjectLoad()
     QSignalSpy requests(controller.data(), SIGNAL(loginRequested()));
     QSignalSpy signIn(controller.data(), SIGNAL(signInRequired()));
     QSignalSpy failures(controller.data(), SIGNAL(loadFailed(int)));
+    QCoreApplication::processEvents();
 
     browser.start(QUrl(QStringLiteral("https://www.overleaf.com/login")));
+    browser.finish(500);
+    QVERIFY(client.rememberedServer().isEmpty());
+    browser.start(QUrl(QStringLiteral("https://www.overleaf.com.example.org/login")));
     browser.finish(200);
+    QVERIFY(client.rememberedServer().isEmpty());
+    browser.start(QUrl(QStringLiteral("https://www.overleaf.com/login")));
+    browser.finish(200);
+    QVERIFY2(client.rememberedServer() == QStringLiteral("https://www.overleaf.com"),
+             qPrintable(client.error()));
     QTest::qWait(350);
     QCOMPARE(requests.count(), 0);
     QCOMPARE(signIn.count(), 1);
@@ -293,8 +397,8 @@ void AutoLoginTests::automaticLoginOnlyAfterSuccessfulProjectLoad()
     browser.finish(500);
     QTest::qWait(350);
     QCOMPARE(requests.count(), 0);
-    QCOMPARE(failures.count(), 1);
-    QCOMPARE(failures.at(0).at(0).toInt(), 500);
+    QCOMPARE(failures.count(), 2);
+    QCOMPARE(failures.at(1).at(0).toInt(), 500);
 
     browser.start(QUrl(QStringLiteral("https://www.overleaf.com.example.org/project")));
     browser.finish(200);
@@ -313,6 +417,9 @@ void AutoLoginTests::automaticLoginOnlyAfterSuccessfulProjectLoad()
     browser.start(QUrl(QStringLiteral("https://www.overleaf.com/project")));
     browser.finish(200, true);
     QTRY_COMPARE(requests.count(), 2);
+    QSettings::setDefaultFormat(originalFormat);
+    QCoreApplication::setOrganizationName(originalOrganization);
+    QCoreApplication::setApplicationName(originalApplication);
 }
 
 void AutoLoginTests::interfaceComponentsLoad()
@@ -519,7 +626,7 @@ void AutoLoginTests::editorScrollsLongDocuments()
     page->setProperty("zoomTarget", QStringLiteral("editor"));
     QTest::mouseMove(&window, pdfPoint.toPoint());
     QTRY_COMPARE(page->property("zoomTarget").toString(), QStringLiteral("pdf"));
-    QSignalSpy pdfClicks(preview, SIGNAL(clicked(QVariant)));
+    QSignalSpy pdfClicks(preview, SIGNAL(clicked()));
     QVERIFY(pdfClicks.isValid());
     QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, pdfPoint.toPoint());
     QTRY_COMPARE(pdfClicks.count(), 1);
@@ -585,6 +692,40 @@ void AutoLoginTests::projectViewFiltersArchived()
     QCOMPARE(archived.at(0).toMap().value(QStringLiteral("name")).toString(), QStringLiteral("Archived"));
 }
 
+void AutoLoginTests::opensProjectFilesByType()
+{
+    FakeFileClient client;
+    FakeFileEditor editor;
+    FakePageStack stack;
+    QQmlEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("overleafClient"), &client);
+    engine.rootContext()->setContextProperty(QStringLiteral("pageStack"), &stack);
+    const QUrl base = QUrl::fromLocalFile(QStringLiteral(AUTO_LOGIN_QML_PATH));
+    QQmlComponent component(&engine, base.resolved(QUrl(QStringLiteral("ProjectFilesPage.qml"))));
+    QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+    QScopedPointer<QObject> page(component.create());
+    QVERIFY2(page, qPrintable(component.errorString()));
+    page->setProperty("projectId", QStringLiteral("project"));
+    page->setProperty("editorPage", QVariant::fromValue(static_cast<QObject *>(&editor)));
+    const QVariant image = QVariantMap{{QStringLiteral("type"), QStringLiteral("file")},
+                                       {QStringLiteral("path"), QStringLiteral("/figures/image.png")}};
+    QVERIFY(QMetaObject::invokeMethod(page.data(), "openFile", Q_ARG(QVariant, image)));
+    QCOMPARE(client.openedProject, QStringLiteral("project"));
+    QCOMPARE(client.openedPath, QStringLiteral("/figures/image.png"));
+    QCOMPARE(stack.pops, 0);
+    const QVariant doc = QVariantMap{{QStringLiteral("type"), QStringLiteral("doc")},
+                                     {QStringLiteral("path"), QStringLiteral("/main.tex")}};
+    QVERIFY(QMetaObject::invokeMethod(page.data(), "openFile", Q_ARG(QVariant, doc)));
+    QCOMPARE(editor.openedPath, QStringLiteral("/main.tex"));
+    QCOMPARE(stack.pops, 1);
+    client.openedPath.clear();
+    client.sourceBusy = true;
+    emit client.sourceBusyChanged();
+    QVERIFY(QMetaObject::invokeMethod(page.data(), "openFile", Q_ARG(QVariant, image)));
+    QVERIFY(client.openedPath.isEmpty());
+    QCOMPARE(stack.pops, 1);
+}
+
 void AutoLoginTests::pdfPaneLoadsDocument()
 {
     QTemporaryDir directory;
@@ -618,6 +759,8 @@ void AutoLoginTests::pdfPaneLoadsDocument()
     page->setProperty("projectId", QStringLiteral("test"));
     component.completeCreate();
     page->setProperty("visible", true);
+    page->setProperty("width", 600);
+    page->setProperty("height", 800);
     QObject *loader = page->findChild<QObject *>(QStringLiteral("pdfLoader"));
     QObject *compileButton = page->findChild<QObject *>(QStringLiteral("pdfCompileButton"));
     QObject *progress = page->findChild<QObject *>(QStringLiteral("compileProgress"));
@@ -653,9 +796,23 @@ void AutoLoginTests::pdfPaneLoadsDocument()
     QVERIFY(preview);
     QTRY_COMPARE(preview->property("status").toInt(), 2);
     QCOMPARE(preview->property("count").toInt(), 1);
+    QObject *geometry = page->findChild<QObject *>(QStringLiteral("pdfGeometry"));
+    QVERIFY(geometry);
+    QTRY_VERIFY(geometry->property("ready").toBool());
+    QSignalSpy syncFailures(preview, SIGNAL(syncFailure(QString)));
+    QVERIFY(syncFailures.isValid());
+    QVariantMap position{{QStringLiteral("page"), 1}, {QStringLiteral("h"), 20},
+                         {QStringLiteral("v"), 30}};
+    QVERIFY(QMetaObject::invokeMethod(preview, "showSyncPosition",
+                                     Q_ARG(QVariant, QVariant(position))));
+    QCOMPARE(syncFailures.count(), 0);
+    QCOMPARE(preview->property("syncHighlightPage").toInt(), 0);
+    position[QStringLiteral("h")] = -1;
+    QVERIFY(QMetaObject::invokeMethod(preview, "showSyncPosition",
+                                     Q_ARG(QVariant, QVariant(position))));
+    QCOMPARE(syncFailures.count(), 1);
     page->setProperty("zoomTarget", QStringLiteral("editor"));
-    QVERIFY(QMetaObject::invokeMethod(preview, "clicked",
-                                     Q_ARG(QVariant, QVariant::fromValue(QPointF(1, 1)))));
+    QVERIFY(QMetaObject::invokeMethod(preview, "clicked"));
     QCOMPARE(page->property("zoomTarget").toString(), QStringLiteral("pdf"));
     QPointer<QObject> oldPreview(preview);
     client.setPdfPath(QString());

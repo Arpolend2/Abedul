@@ -7,6 +7,7 @@
 #include <QPointer>
 #include <QScopedPointer>
 #include <QTemporaryFile>
+#include "synctex.h"
 
 class QNetworkReply;
 class RealtimeSocket;
@@ -59,13 +60,17 @@ public:
 
     Q_INVOKABLE bool setServer(const QString &address);
     Q_INVOKABLE bool isProjectListUrl(const QUrl &url) const;
+    Q_INVOKABLE bool confirmServerConnection(const QUrl &url, int httpStatusCode);
     Q_INVOKABLE void finishBrowserLogin(const QVariantList &cookies);
     Q_INVOKABLE void refreshProjects();
     Q_INVOKABLE void compileProjectPdf(const QString &projectId, const QString &rootPath);
     Q_INVOKABLE void closeProjectPdf();
+    Q_INVOKABLE void syncSourceToPdf(const QString &projectId, const QString &path, int line, int column);
+    Q_INVOKABLE void syncPdfToSource(const QString &projectId, int page, double h, double v);
     Q_INVOKABLE void loadProjectFiles(const QString &projectId);
     Q_INVOKABLE void closeProjectFiles();
     Q_INVOKABLE void openProjectSource(const QString &projectId, const QString &path);
+    Q_INVOKABLE void openProjectFileExternally(const QString &projectId, const QString &path);
     Q_INVOKABLE void saveProjectSource(const QString &projectId, const QString &path,
                                        const QString &base, bool baseKnown, const QString &text);
     Q_INVOKABLE void closeProjectSource();
@@ -90,6 +95,10 @@ signals:
     void sourceSaved(const QString &path, const QString &text);
     void pdfOnLeftChanged();
     void editorFontScaleChanged();
+    void syncPdfPositions(const QVariantList &positions);
+    void syncSourcePositions(const QVariantList &positions);
+    void syncError(const QString &message);
+    void externalFileReady(const QUrl &url);
 
 private:
     void setError(const QString &message);
@@ -99,10 +108,15 @@ private:
     void loadProjects();
     void setPdfError(const QString &message);
     void setPdfBusy(bool busy);
-    void downloadProjectPdf(const QByteArray &response, quint64 generation);
+    void downloadProjectPdf(const QByteArray &response, quint64 generation,
+                            const QString &projectId, const QString &editorId, const QString &rootPath);
+    void syncRequest(const QUrl &url, bool toPdf);
     void sourceFailed(const QString &message);
     void startProjectSource(const QString &projectId, const QString &path, bool saving,
-                            const QString &base, bool baseKnown, const QString &text);
+                            const QString &base, bool baseKnown, const QString &text,
+                            bool openingExternal = false);
+    void downloadExternalFile(const QString &projectId, const QString &fileId, const QString &path,
+                              quint64 generation);
     void completeSourceSave();
 
     QNetworkAccessManager m_network;
@@ -121,7 +135,13 @@ private:
     quint64 m_pdfGeneration = 0;
     QPointer<QNetworkReply> m_pdfReply;
     QScopedPointer<QTemporaryFile> m_pdfFile;
+    SyncTeXBuild m_syncBuild;
+    QString m_syncProject;
+    QString m_syncRoot;
+    QPointer<QNetworkReply> m_syncReply;
+    quint64 m_syncGeneration = 0;
     QVariantList m_projectFiles;
+    QString m_filesProject;
     QString m_filesError;
     bool m_filesBusy = false;
     quint64 m_filesGeneration = 0;
@@ -136,6 +156,8 @@ private:
     QPointer<QNetworkReply> m_sourceReply;
     QPointer<RealtimeSocket> m_sourceSocket;
     bool m_savingSource = false;
+    bool m_openingExternal = false;
+    QScopedPointer<QTemporaryFile> m_externalFile;
     bool m_saveBaseKnown = false;
     bool m_saveSubmitted = false;
     bool m_saveConcurrent = false;

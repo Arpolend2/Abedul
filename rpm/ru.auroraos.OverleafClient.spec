@@ -1,14 +1,16 @@
+%define __provides_exclude_from ^(%{_datadir}/%{name}/lib/|%{_datadir}/%{name}/ru/auroraos/amberpdf/).*$
+%define __requires_exclude ^lib(jpeg|turbojpeg|pdfium|amberpdf|amberpdfqmlplugin)\\.so.*$
+
 Name:       ru.auroraos.OverleafClient
 Summary:    Native Overleaf client for Aurora OS
-Version:    1.0.0
+Version:    1.1.0
 Release:    1
 Group:      Qt/Qt
-License:    Proprietary
+License:    Proprietary and BSD-3-Clause and IJG
 URL:        https://www.overleaf.com/
 Source0:    %{name}-%{version}.tar.bz2
 
 Requires:       sailfishsilica-qt5 >= 0.10.9
-Requires:       amberpdf-qml-plugin
 BuildRequires:  pkgconfig(auroraapp)
 BuildRequires:  pkgconfig(aurorawebview)
 BuildRequires:  pkgconfig(Qt5Core)

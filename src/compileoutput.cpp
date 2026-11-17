@@ -6,7 +6,8 @@
 #include <QJsonParseError>
 #include <QUrlQuery>
 
-bool compileRequestBody(const QString &rootPath, QByteArray *body, QString *error)
+bool compileRequestBody(const QString &rootPath, QByteArray *body, QString *error,
+                        const QString &editorId)
 {
     QString path = rootPath;
     if (path.startsWith(QLatin1Char('/')))
@@ -19,13 +20,15 @@ bool compileRequestBody(const QString &rootPath, QByteArray *body, QString *erro
         *error = QStringLiteral("Select a valid main document.");
         return false;
     }
-    const QJsonObject payload{
+    QJsonObject payload{
         {QStringLiteral("check"), QStringLiteral("silent")},
         {QStringLiteral("draft"), false},
         {QStringLiteral("incrementalCompilesEnabled"), true},
         {QStringLiteral("rootResourcePath"), path},
         {QStringLiteral("stopOnFirstError"), false}
     };
+    if (!editorId.isEmpty())
+        payload.insert(QStringLiteral("editorId"), editorId);
     *body = QJsonDocument(payload).toJson(QJsonDocument::Compact);
     error->clear();
     return true;

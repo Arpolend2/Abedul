@@ -1,0 +1,4 @@
+[submodule "vendor/PdfViewer"]
+	path = vendor/PdfViewer
+	url = https://gitlab.com/omprussia/examples/PdfViewer.git
+	branch = example

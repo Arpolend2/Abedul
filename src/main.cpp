@@ -9,6 +9,8 @@
 #include "overleafclient.h"
 #include "draftstore.h"
 #include "latexhighlighter.h"
+#include "pdfgeometry.h"
+#include "doubletapmonitor.h"
 
 int main(int argc, char **argv)
 {
@@ -18,10 +20,13 @@ int main(int argc, char **argv)
     application->setApplicationName(QStringLiteral("OverleafClient"));
     application->setApplicationDisplayName(QStringLiteral("Abedul"));
     qmlRegisterType<LatexHighlighter>("Abedul", 1, 0, "LatexHighlighter");
+    qmlRegisterType<PdfGeometry>("Abedul", 1, 0, "PdfGeometry");
+    qmlRegisterType<DoubleTapMonitor>("Abedul", 1, 0, "DoubleTapMonitor");
 
     OverleafClient client;
     DraftStore drafts;
     QScopedPointer<QQuickView> view(Aurora::Application::createView());
+    view->engine()->addImportPath(Aurora::Application::pathTo(QString()).toLocalFile());
     Aurora::WebView::WebEngineContext::InitBrowser(argc, argv, {"--default-encoding=UTF-8"});
     view->rootContext()->setContextProperty(QStringLiteral("overleafClient"), &client);
     view->rootContext()->setContextProperty(QStringLiteral("draftStore"), &drafts);

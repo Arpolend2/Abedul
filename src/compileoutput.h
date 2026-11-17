@@ -6,5 +6,6 @@
 
 bool compilePdfUrl(const QByteArray &response, const QUrl &server,
                    QUrl *url, bool *sendCookies, QString *error);
-bool compileRequestBody(const QString &rootPath, QByteArray *body, QString *error);
+bool compileRequestBody(const QString &rootPath, QByteArray *body, QString *error,
+                        const QString &editorId = QString());
 QString compileServerError(const QByteArray &response);

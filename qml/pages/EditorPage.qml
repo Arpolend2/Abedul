@@ -1,6 +1,6 @@
 import QtQuick 2.5
 import Sailfish.Silica 1.0
-import ru.omp.amberpdf 1.0
+import ru.auroraos.amberpdf 1.0
 import Abedul 1.0
 
 Page {
@@ -21,6 +21,13 @@ Page {
     property bool lastFileRestored: false
     property bool compileHintShown: false
     property string zoomTarget: "editor"
+    property var pendingSyncSource: null
+    property string syncRequestFile: ""
+    property string syncRequestText: ""
+    property string pendingSnapshotFile: ""
+    property string pendingSnapshotText: ""
+    property string compiledSnapshotFile: ""
+    property string compiledSnapshotText: ""
     property bool compileInProgress: overleafClient.pdfBusy
                                      || (pendingCompileRoot.length > 0 && overleafClient.sourceBusy)
     property bool openingSource: started && overleafClient.sourceBusy && !pendingCompileRoot.length
@@ -87,6 +94,57 @@ Page {
         return true
     }
 
+    function syncAllowed() {
+        if (!overleafClient.pdfPath.length || overleafClient.pdfBusy || overleafClient.sourceBusy) {
+            actionError = qsTr("Compile the project and wait for the file to open before using SyncTeX.")
+            return false
+        }
+        if (!currentFile.length || !baseKnown || editor.text !== baseText
+                || (currentFile === compiledSnapshotFile && editor.text !== compiledSnapshotText)) {
+            actionError = qsTr("Save and compile local changes before using SyncTeX.")
+            return false
+        }
+        actionError = ""
+        syncRequestFile = currentFile
+        syncRequestText = editor.text
+        return true
+    }
+
+    function normalizeSyncPath(path) {
+        var parts = path.split("/")
+        var normalized = []
+        for (var i = 0; i < parts.length; ++i) {
+            if (parts[i] === ".." || parts[i].indexOf("\\") !== -1)
+                return ""
+            if (parts[i].length && parts[i] !== ".")
+                normalized.push(parts[i])
+        }
+        return normalized.length ? "/" + normalized.join("/") : ""
+    }
+
+    function moveToSource(position) {
+        if (!baseKnown || editor.text !== baseText
+                || (currentFile === compiledSnapshotFile && editor.text !== compiledSnapshotText)) {
+            actionError = qsTr("The target file has local changes. Save and compile before using SyncTeX.")
+            return
+        }
+        var lines = editor.text.split("\n")
+        if (position.line < 1 || position.line > lines.length) {
+            actionError = qsTr("The SyncTeX source line is not available in this file.")
+            return
+        }
+        var offset = 0
+        for (var i = 0; i < position.line - 1; ++i)
+            offset += lines[i].length + 1
+        var column = position.column >= 0 ? position.column : 0
+        editor._editor.cursorPosition = offset + Math.min(column, lines[position.line - 1].length)
+        editor._editor.forceActiveFocus()
+        var rect = editor._editor.positionToRectangle(editor._editor.cursorPosition)
+        var mapped = editor._editor.mapToItem(codePane.contentItem, rect.x, rect.y)
+        codePane.contentY = Math.max(0, Math.min(codePane.contentHeight - codePane.height,
+                                                mapped.y - codePane.height / 2))
+    }
+
     function restoreLastFile() {
         if (lastFileRestored)
             return
@@ -131,15 +189,23 @@ Page {
     Connections {
         target: overleafClient
         onSourceErrorChanged: {
-            if (overleafClient.sourceError.length && !overleafClient.sourceBusy)
+            if (overleafClient.sourceError.length && !overleafClient.sourceBusy) {
                 page.pendingCompileRoot = ""
+                page.pendingSyncSource = null
+            }
         }
         onPdfPathChanged: {
             if (!overleafClient.pdfPath.length) {
                 compileHintTimer.stop()
-            } else if (!page.compileHintShown) {
-                page.compileHintShown = true
-                compileHintTimer.restart()
+            } else {
+                page.compiledSnapshotFile = page.pendingSnapshotFile
+                page.compiledSnapshotText = page.pendingSnapshotText
+                page.pendingSnapshotFile = ""
+                page.pendingSnapshotText = ""
+                if (!page.compileHintShown) {
+                    page.compileHintShown = true
+                    compileHintTimer.restart()
+                }
             }
         }
         onSourceTextChanged: {
@@ -159,7 +225,7 @@ Page {
                 page.baseText = overleafClient.sourceText
             }
             page.actionError = ""
-            if (/\.tex$/i.test(page.currentFile)) {
+            if (/\.tex$/i.test(page.currentFile) && !page.pendingSyncSource) {
                 page.compileRoot = page.currentFile
                 if (!draftStore.saveCompileRoot(overleafClient.server, page.projectId, page.compileRoot))
                     page.actionError = draftStore.error
@@ -167,6 +233,11 @@ Page {
             if (!draftStore.saveLastFile(overleafClient.server, page.projectId, page.currentFile))
                 page.actionError = draftStore.error
             page.initialized = true
+            if (page.pendingSyncSource && page.pendingSyncSource.path === page.currentFile) {
+                var location = page.pendingSyncSource
+                page.pendingSyncSource = null
+                page.moveToSource(location)
+            }
         }
         onSourceSaved: {
             if (!page.started || path !== page.currentFile || !page.pendingCompileRoot.length)
@@ -180,7 +251,60 @@ Page {
             }
             var root = page.pendingCompileRoot
             page.pendingCompileRoot = ""
+            page.pendingSnapshotFile = path
+            page.pendingSnapshotText = text
             overleafClient.compileProjectPdf(page.projectId, root)
+        }
+        onSyncError: page.actionError = message
+        onSyncPdfPositions: {
+            if (page.syncRequestFile !== page.currentFile || page.syncRequestText !== editor.text) {
+                page.actionError = qsTr("The source changed while SyncTeX was running.")
+                return
+            }
+            if (pdfLoader.item && positions.length)
+                pdfLoader.item.showSyncPosition(positions[0])
+        }
+        onSyncSourcePositions: {
+            if (page.syncRequestFile !== page.currentFile || page.syncRequestText !== editor.text) {
+                page.actionError = qsTr("The source changed while SyncTeX was running.")
+                return
+            }
+            if (!positions.length)
+                return
+            var position = positions[0]
+            var path = page.normalizeSyncPath(position.file)
+            if (!path) {
+                page.actionError = qsTr("The server returned an invalid source path.")
+                return
+            }
+            position.path = path
+            if (path === page.currentFile) {
+                page.moveToSource(position)
+            } else {
+                page.pendingSyncSource = position
+                if (!page.openProjectFile(path))
+                    page.pendingSyncSource = null
+            }
+        }
+    }
+
+    PdfGeometry {
+        id: pdfGeometry
+        objectName: "pdfGeometry"
+        path: overleafClient.pdfPath
+    }
+
+    DoubleTapMonitor {
+        target: page.status === PageStatus.Active && page.started ? editor._editor : null
+        onDoubleTapped: {
+            if (!page.syncAllowed())
+                return
+            var index = editor._editor.positionAt(x, y)
+            if (index < 0)
+                return
+            var before = editor.text.substring(0, index).split("\n")
+            overleafClient.syncSourceToPdf(page.projectId, page.currentFile,
+                                          before.length, before[before.length - 1].length)
         }
     }
 
@@ -250,17 +374,17 @@ Page {
                 text: page.projectName
             }
             MenuItem {
+                objectName: "editorSettings"
+                text: qsTr("Settings")
+                onClicked: pageStack.push(Qt.resolvedUrl("SettingsPage.qml"))
+            }
+            MenuItem {
                 text: qsTr("Project files")
                 onClicked: pageStack.push(Qt.resolvedUrl("ProjectFilesPage.qml"), {
                     "projectId": page.projectId,
                     "projectName": page.projectName,
                     "editorPage": page
                 })
-            }
-            MenuItem {
-                objectName: "editorSettings"
-                text: qsTr("Settings")
-                onClicked: pageStack.push(Qt.resolvedUrl("SettingsPage.qml"))
             }
             MenuItem {
                 objectName: "saveAndCompile"
@@ -424,12 +548,18 @@ Page {
                         anchors.topMargin: pdfHeader.height
                         active: overleafClient.pdfPath.length > 0
                         clip: true
-                        sourceComponent: PdfView {
+                        sourceComponent: SyncPdfView {
                             objectName: "pdfPreview"
                             documentProvider: pdfDocument
                             pdfPath: overleafClient.pdfPath
                             fitToPage: true
+                            geometry: pdfGeometry
                             onClicked: page.zoomTarget = "pdf"
+                            onSyncFailure: page.actionError = message
+                            onSyncToSource: {
+                                if (page.syncAllowed())
+                                    overleafClient.syncPdfToSource(page.projectId, pageNumber, h, v)
+                            }
                             PdfDocument { id: pdfDocument }
                         }
                     }

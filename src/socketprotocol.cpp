@@ -6,11 +6,11 @@
 
 namespace {
 bool visitFolder(const QJsonObject &folder, const QString &prefix, const QString &wanted,
-                 QString *found, int depth)
+                 const QString &kind, QString *found, int depth)
 {
     if (depth > 100)
         return false;
-    for (const QJsonValue &value : folder.value(QStringLiteral("docs")).toArray()) {
+    for (const QJsonValue &value : folder.value(kind).toArray()) {
         const QJsonObject doc = value.toObject();
         const QString name = doc.value(QStringLiteral("name")).toString();
         if (prefix + name == wanted && !doc.value(QStringLiteral("_id")).toString().isEmpty()) {
@@ -26,7 +26,7 @@ bool visitFolder(const QJsonObject &folder, const QString &prefix, const QString
         const QString name = child.value(QStringLiteral("name")).toString();
         if (name.isEmpty() || name.contains(QLatin1Char('/')) || name == QStringLiteral(".."))
             return false;
-        if (!visitFolder(child, prefix + name + QLatin1Char('/'), wanted, found, depth + 1))
+        if (!visitFolder(child, prefix + name + QLatin1Char('/'), wanted, kind, found, depth + 1))
             return false;
     }
     return true;
@@ -68,7 +68,8 @@ QByteArray socketCookieHeader(const QByteArray &browserCookies, const QList<QNet
     return result;
 }
 
-bool findProjectDoc(const QJsonObject &project, const QString &path, QString *id, QString *error)
+static bool findProjectEntity(const QJsonObject &project, const QString &path, const QString &kind,
+                              QString *id, QString *error)
 {
     id->clear();
     QString wanted = path;
@@ -76,12 +77,23 @@ bool findProjectDoc(const QJsonObject &project, const QString &path, QString *id
         wanted.remove(0, 1);
     const QJsonArray roots = project.value(QStringLiteral("rootFolder")).toArray();
     if (wanted.isEmpty() || roots.size() != 1 || !roots.at(0).isObject()
-            || !visitFolder(roots.at(0).toObject(), QString(), wanted, id, 0) || id->isEmpty()) {
-        *error = QStringLiteral("Could not find the selected document in the project.");
+            || !visitFolder(roots.at(0).toObject(), QString(), wanted, kind, id, 0) || id->isEmpty()) {
+        id->clear();
+        *error = QStringLiteral("Could not find the selected file in the project.");
         return false;
     }
     error->clear();
     return true;
+}
+
+bool findProjectDoc(const QJsonObject &project, const QString &path, QString *id, QString *error)
+{
+    return findProjectEntity(project, path, QStringLiteral("docs"), id, error);
+}
+
+bool findProjectFile(const QJsonObject &project, const QString &path, QString *id, QString *error)
+{
+    return findProjectEntity(project, path, QStringLiteral("fileRefs"), id, error);
 }
 
 QJsonArray makeTextOperation(const QString &before, const QString &after)
