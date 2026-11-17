@@ -689,17 +689,33 @@ void AutoLoginTests::editorPersistsDraft()
     QObject *pdfLoader = page->findChild<QObject *>(QStringLiteral("pdfLoader"));
     QObject *headerBackground = page->findChild<QObject *>(QStringLiteral("editorHeaderBackground"));
     QObject *projectName = page->findChild<QObject *>(QStringLiteral("editorProjectName"));
+    QQuickItem *settings = page->findChild<QQuickItem *>(QStringLiteral("editorSettings"));
+    QQuickItem *openPdf = page->findChild<QQuickItem *>(QStringLiteral("openCachedPdf"));
+    QQuickItem *downloadZip = page->findChild<QQuickItem *>(QStringLiteral("downloadProjectArchive"));
+    QQuickItem *projectFiles = page->findChild<QQuickItem *>(QStringLiteral("editorProjectFiles"));
     QObject *saveMenuItem = page->findChild<QObject *>(QStringLiteral("saveAndCompile"));
     QVERIFY(header);
     QVERIFY(codePane);
     QVERIFY(pdfLoader);
     QVERIFY(headerBackground);
     QVERIFY(projectName);
+    QVERIFY(settings);
+    QVERIFY(openPdf);
+    QVERIFY(downloadZip);
+    QVERIFY(projectFiles);
     QVERIFY(saveMenuItem);
     QCOMPARE(qobject_cast<QQuickItem *>(projectName)->parentItem(),
              qobject_cast<QQuickItem *>(saveMenuItem)->parentItem());
-    QTRY_VERIFY(qobject_cast<QQuickItem *>(projectName)->y()
-                < qobject_cast<QQuickItem *>(saveMenuItem)->y());
+    const QList<QQuickItem *> menuItems = settings->parentItem()->childItems();
+    const QList<QQuickItem *> expectedOrder = {
+        qobject_cast<QQuickItem *>(projectName), settings, openPdf, downloadZip,
+        projectFiles, qobject_cast<QQuickItem *>(saveMenuItem)
+    };
+    for (int i = 0; i + 1 < expectedOrder.size(); ++i) {
+        const int position = menuItems.indexOf(expectedOrder.at(i));
+        QVERIFY(position >= 0);
+        QVERIFY(position < menuItems.indexOf(expectedOrder.at(i + 1)));
+    }
     QCOMPARE(projectName->property("text").toString(), QStringLiteral("Test"));
     page->setProperty("projectName", QStringLiteral("Renamed"));
     QCOMPARE(projectName->property("text").toString(), QStringLiteral("Renamed"));

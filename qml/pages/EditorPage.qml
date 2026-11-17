@@ -476,6 +476,19 @@ Page {
                 onClicked: pageStack.push(Qt.resolvedUrl("SettingsPage.qml"))
             }
             MenuItem {
+                objectName: "openCachedPdf"
+                text: qsTr("Open PDF in another app")
+                enabled: overleafClient.pdfPath.length > 0 && !overleafClient.pdfBusy
+                onClicked: externalPdf.open()
+            }
+            MenuItem {
+                objectName: "downloadProjectArchive"
+                text: qsTr("Download saved project ZIP")
+                enabled: !overleafClient.archiveBusy
+                onClicked: overleafClient.downloadProjectArchive(page.projectId)
+            }
+            MenuItem {
+                objectName: "editorProjectFiles"
                 text: qsTr("Project files")
                 onClicked: pageStack.push(Qt.resolvedUrl("ProjectFilesPage.qml"), {
                     "projectId": page.projectId,
@@ -488,18 +501,6 @@ Page {
                 text: qsTr("Save and compile")
                 enabled: !overleafClient.sourceBusy && !overleafClient.pdfBusy
                 onClicked: page.saveAndCompile()
-            }
-            MenuItem {
-                objectName: "openCachedPdf"
-                text: qsTr("Open PDF in another app")
-                enabled: overleafClient.pdfPath.length > 0 && !overleafClient.pdfBusy
-                onClicked: externalPdf.open()
-            }
-            MenuItem {
-                objectName: "downloadProjectArchive"
-                text: qsTr("Download saved project ZIP")
-                enabled: !overleafClient.archiveBusy
-                onClicked: overleafClient.downloadProjectArchive(page.projectId)
             }
         }
         Rectangle {
