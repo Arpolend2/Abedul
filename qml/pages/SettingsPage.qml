@@ -30,6 +30,22 @@ Page {
                 valueText: Math.round(value) + "%"
                 onValueChanged: overleafClient.editorFontScale = Math.round(value)
             }
+            Label {
+                objectName: "zoomShortcutHint"
+                x: Theme.horizontalPageMargin
+                width: parent.width - 2 * x
+                wrapMode: Text.Wrap
+                color: Theme.secondaryColor
+                text: qsTr("To zoom the editor or PDF, point at the desired area and use Ctrl++ / Ctrl+- or Ctrl + mouse wheel.")
+            }
+            Label {
+                objectName: "saveShortcutHint"
+                x: Theme.horizontalPageMargin
+                width: parent.width - 2 * x
+                wrapMode: Text.Wrap
+                color: Theme.secondaryColor
+                text: qsTr("Press Ctrl+S to save and compile.")
+            }
         }
         VerticalScrollDecorator {}
     }

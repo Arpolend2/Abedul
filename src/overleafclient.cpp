@@ -28,6 +28,7 @@ OverleafClient::OverleafClient(QObject *parent) : QObject(parent)
     QSettings settings;
     m_pdfOnLeft = settings.value(QStringLiteral("pdfOnLeft"), false).toBool();
     m_editorFontScale = qBound(70, settings.value(QStringLiteral("editorFontScale"), 100).toInt(), 160);
+    m_completionHintCount = qBound(0, settings.value(QStringLiteral("completionHintCount"), 0).toInt(), 5);
     m_rememberedServers = settings.value(QStringLiteral("servers")).toStringList();
     m_rememberedServer = settings.value(QStringLiteral("lastServer")).toString();
     if (!m_rememberedServer.isEmpty() && !m_rememberedServers.contains(m_rememberedServer))
@@ -36,6 +37,19 @@ OverleafClient::OverleafClient(QObject *parent) : QObject(parent)
         m_rememberedServer = m_rememberedServers.first();
 }
 QString OverleafClient::server() const { return m_server.toString(); }
+int OverleafClient::completionHintCount() const { return m_completionHintCount; }
+void OverleafClient::recordCompletionHintShown()
+{
+    if (m_completionHintCount >= 5)
+        return;
+    ++m_completionHintCount;
+    QSettings settings;
+    settings.setValue(QStringLiteral("completionHintCount"), m_completionHintCount);
+    settings.sync();
+    if (settings.status() != QSettings::NoError)
+        qWarning("Could not save completion hint count");
+    emit completionHintCountChanged();
+}
 QString OverleafClient::rememberedServer() const { return m_rememberedServer; }
 QStringList OverleafClient::rememberedServers() const { return m_rememberedServers; }
 QString OverleafClient::error() const { return m_error; }

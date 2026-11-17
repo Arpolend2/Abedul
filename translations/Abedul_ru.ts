@@ -128,6 +128,10 @@
 <context>
     <name>EditorPage</name>
     <message>
+        <source>Press Tab to accept</source>
+        <translation>Нажмите Tab, чтобы принять подсказку</translation>
+    </message>
+    <message>
         <source>Could not capture the PDF preview.</source>
         <translation>Не удалось создать миниатюру PDF.</translation>
     </message>
@@ -216,8 +220,8 @@
         <translation>Открытие файла…</translation>
     </message>
     <message>
-        <source>Pull down from the top to save and compile again.</source>
-        <translation>Потяните сверху вниз, чтобы снова сохранить и скомпилировать.</translation>
+        <source>Pull down from the top or press Ctrl+S to save and compile again.</source>
+        <translation>Потяните сверху вниз или нажмите Ctrl+S, чтобы снова сохранить и скомпилировать.</translation>
     </message>
     <message>
         <source>Compiling…</source>
@@ -630,6 +634,14 @@
 </context>
 <context>
     <name>SettingsPage</name>
+    <message>
+        <source>Press Ctrl+S to save and compile.</source>
+        <translation>Нажмите Ctrl+S, чтобы сохранить и скомпилировать.</translation>
+    </message>
+    <message>
+        <source>To zoom the editor or PDF, point at the desired area and use Ctrl++ / Ctrl+- or Ctrl + mouse wheel.</source>
+        <translation>Чтобы изменить масштаб редактора или PDF, наведите указатель на нужную область и используйте Ctrl++ / Ctrl+- или Ctrl и колесо мыши.</translation>
+    </message>
     <message>
         <source>Settings</source>
         <translation>Настройки</translation>

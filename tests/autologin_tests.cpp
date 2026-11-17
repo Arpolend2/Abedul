@@ -161,6 +161,7 @@ class FakePdfClient : public QObject
     Q_PROPERTY(bool sourceBusy READ sourceBusy NOTIFY sourceBusyChanged)
     Q_PROPERTY(bool pdfOnLeft MEMBER pdfOnLeft NOTIFY pdfOnLeftChanged)
     Q_PROPERTY(int editorFontScale MEMBER editorFontScale NOTIFY editorFontScaleChanged)
+    Q_PROPERTY(int completionHintCount MEMBER completionHintCount NOTIFY completionHintCountChanged)
 public:
     QVariantList projects() const
     {
@@ -193,6 +194,8 @@ public:
     int saves = 0;
     bool pdfOnLeft = false;
     int editorFontScale = 100;
+    int completionHintCount = 0;
+    Q_INVOKABLE void recordCompletionHintShown() { ++completionHintCount; emit completionHintCountChanged(); }
     int compiles = 0;
     int sourceCloses = 0;
     int pdfCloses = 0;
@@ -220,6 +223,7 @@ signals:
     void sourceErrorChanged();
     void pdfOnLeftChanged();
     void editorFontScaleChanged();
+    void completionHintCountChanged();
     void sourceTextChanged();
     void sourceSaved(const QString &path, const QString &text);
     void syncError(const QString &message);
@@ -321,6 +325,7 @@ private slots:
     void opensProjectFilesByType();
     void editorPersistsDraft();
     void completesLatexCommands();
+    void completionTabHint();
     void editorScrollsLongDocuments();
     void projectViewFiltersArchived();
     void pdfPaneLoadsDocument();
@@ -511,6 +516,13 @@ void AutoLoginTests::russianTranslations()
         QCOMPARE(realClient.error(), QString::fromUtf8("Введите HTTPS-адрес сервера без пути."));
         QCOMPARE(QCoreApplication::translate("OverleafClient", "Project ZIP downloaded"),
                  QString::fromUtf8("ZIP-архив проекта загружен"));
+        QCOMPARE(QCoreApplication::translate("EditorPage", "Press Tab to accept"),
+                 QString::fromUtf8("Нажмите Tab, чтобы принять подсказку"));
+        QCOMPARE(QCoreApplication::translate("SettingsPage", "Press Ctrl+S to save and compile."),
+                 QString::fromUtf8("Нажмите Ctrl+S, чтобы сохранить и скомпилировать."));
+        QVERIFY(QCoreApplication::translate("SettingsPage",
+                "To zoom the editor or PDF, point at the desired area and use Ctrl++ / Ctrl+- or Ctrl + mouse wheel.")
+                .contains(QString::fromUtf8("колесо мыши")));
     }
     QVERIFY(QCoreApplication::removeTranslator(&translator));
     QCOMPARE(QCoreApplication::translate("EditorPage", "Save and compile"),
@@ -832,7 +844,7 @@ void AutoLoginTests::completesLatexCommands()
 
     editor->setProperty("text", QStringLiteral("  \\eqn"));
     input->setProperty("cursorPosition", 6);
-    QCOMPARE(hint->property("text").toString(), QStringLiteral(" -> \\begin{eqnarray}..."));
+    QVERIFY(hint->property("text").toString().startsWith(QStringLiteral(" -> \\begin{eqnarray}...")));
     QKeyEvent snippetTab(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
     QCoreApplication::sendEvent(input, &snippetTab);
     QCOMPARE(input->property("text").toString(),
@@ -930,6 +942,68 @@ void AutoLoginTests::completesLatexCommands()
     editor->setProperty("text", QStringLiteral("ordinary"));
     input->setProperty("cursorPosition", 8);
     QVERIFY(!shortcut->property("enabled").toBool());
+}
+
+void AutoLoginTests::completionTabHint()
+{
+    QTemporaryDir directory;
+    DraftStore drafts(directory.path());
+    FakePdfClient client;
+    QQuickView view;
+    view.rootContext()->setContextProperty(QStringLiteral("overleafClient"), &client);
+    view.rootContext()->setContextProperty(QStringLiteral("draftStore"), &drafts);
+    view.setResizeMode(QQuickView::SizeRootObjectToView);
+    view.resize(600, 800);
+    const QUrl base = QUrl::fromLocalFile(QStringLiteral(AUTO_LOGIN_QML_PATH));
+    view.setSource(base.resolved(QUrl(QStringLiteral("EditorPage.qml"))));
+    QVERIFY2(view.status() == QQuickView::Ready, qPrintable(view.errors().isEmpty()
+             ? QString() : view.errors().first().toString()));
+    QQuickItem *page = view.rootObject();
+    page->setVisible(true);
+    QObject *editor = page->findChild<QObject *>(QStringLiteral("draftEditor"));
+    QVERIFY(editor);
+    QQuickItem *input = qobject_cast<QQuickItem *>(editor->property("_editor").value<QObject *>());
+    QQuickItem *hint = page->findChild<QQuickItem *>(QStringLiteral("latexCompletionHint"));
+    QQuickItem *popup = page->findChild<QQuickItem *>(QStringLiteral("latexCompletionPopup"));
+    QObject *text = page->findChild<QObject *>(QStringLiteral("latexCompletionPopupText"));
+    QVERIFY(input && hint && popup && text);
+    page->setProperty("currentFile", QStringLiteral("/main.tex"));
+    page->setProperty("initialized", true);
+    input->forceActiveFocus();
+
+    for (int i = 1; i <= 5; ++i) {
+        editor->setProperty("text", QStringLiteral("\\beg"));
+        input->setProperty("cursorPosition", 4);
+        QTRY_COMPARE(client.completionHintCount, i);
+        QVERIFY(hint->isVisible());
+        QVERIFY(!popup->isVisible());
+        QCOMPARE(hint->property("text").toString(), QStringLiteral("in{}  <- Press Tab to accept"));
+        if (i == 1) {
+            editor->setProperty("text", QStringLiteral("\\beg trailing"));
+            input->setProperty("cursorPosition", 4);
+            QCoreApplication::processEvents();
+            QCOMPARE(client.completionHintCount, i);
+            QVERIFY(popup->isVisible());
+            QCOMPARE(text->property("text").toString(), QStringLiteral("in{}  <- Press Tab to accept"));
+        }
+        editor->setProperty("text", QStringLiteral("\\be"));
+        input->setProperty("cursorPosition", 3);
+        QCoreApplication::processEvents();
+        QCOMPARE(client.completionHintCount, i);
+        editor->setProperty("text", QStringLiteral("plain"));
+        QVERIFY(!popup->isVisible());
+        QTRY_VERIFY(!page->property("completionWasAvailable").toBool());
+    }
+
+    editor->setProperty("text", QStringLiteral("\\beg trailing"));
+    input->setProperty("cursorPosition", 4);
+    QCOMPARE(client.completionHintCount, 5);
+    QVERIFY(popup->isVisible());
+    QCOMPARE(text->property("text").toString(), QStringLiteral("in{}"));
+    editor->setProperty("text", QStringLiteral("\\beg"));
+    input->setProperty("cursorPosition", 4);
+    QVERIFY(!popup->isVisible());
+    QCOMPARE(hint->property("text").toString(), QStringLiteral("in{}"));
 }
 
 void AutoLoginTests::editorScrollsLongDocuments()
@@ -1785,6 +1859,12 @@ void AutoLoginTests::editorSettingsAndZoom()
     QVERIFY(slider);
     slider->setProperty("value", 140);
     QCOMPARE(client.editorFontScale, 140);
+    QObject *zoomHint = settingsPage->findChild<QObject *>(QStringLiteral("zoomShortcutHint"));
+    QVERIFY(zoomHint);
+    QVERIFY(zoomHint->property("text").toString().contains(QStringLiteral("Ctrl")));
+    QObject *saveHint = settingsPage->findChild<QObject *>(QStringLiteral("saveShortcutHint"));
+    QVERIFY(saveHint);
+    QVERIFY(saveHint->property("text").toString().contains(QStringLiteral("Ctrl+S")));
 }
 
 void AutoLoginTests::settingsPersistAcrossClients()
@@ -1802,9 +1882,12 @@ void AutoLoginTests::settingsPersistAcrossClients()
         OverleafClient first;
         first.setPdfOnLeft(true);
         first.setEditorFontScale(130);
+        for (int i = 0; i < 6; ++i)
+            first.recordCompletionHintShown();
         OverleafClient second;
         QCOMPARE(second.pdfOnLeft(), true);
         QCOMPARE(second.editorFontScale(), 130);
+        QCOMPARE(second.completionHintCount(), 5);
     }
     QCoreApplication::setOrganizationName(oldOrg);
     QCoreApplication::setApplicationName(oldApp);

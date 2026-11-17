@@ -40,6 +40,7 @@ class OverleafClient : public QObject
     Q_PROPERTY(bool sourceBusy READ sourceBusy NOTIFY sourceBusyChanged)
     Q_PROPERTY(bool pdfOnLeft READ pdfOnLeft WRITE setPdfOnLeft NOTIFY pdfOnLeftChanged)
     Q_PROPERTY(int editorFontScale READ editorFontScale WRITE setEditorFontScale NOTIFY editorFontScaleChanged)
+    Q_PROPERTY(int completionHintCount READ completionHintCount NOTIFY completionHintCountChanged)
 public:
     explicit OverleafClient(QObject *parent = nullptr);
     QString server() const;
@@ -70,6 +71,8 @@ public:
     void setPdfOnLeft(bool enabled);
     int editorFontScale() const;
     void setEditorFontScale(int percent);
+    int completionHintCount() const;
+    Q_INVOKABLE void recordCompletionHintShown();
 
     Q_INVOKABLE bool setServer(const QString &address);
     Q_INVOKABLE bool isProjectListUrl(const QUrl &url) const;
@@ -116,6 +119,7 @@ signals:
     void sourceSaved(const QString &path, const QString &text);
     void pdfOnLeftChanged();
     void editorFontScaleChanged();
+    void completionHintCountChanged();
     void syncPdfPositions(const QVariantList &positions);
     void syncSourcePositions(const QVariantList &positions);
     void syncError(const QString &message);
@@ -181,6 +185,7 @@ private:
     bool m_sourceBusy = false;
     bool m_pdfOnLeft = false;
     int m_editorFontScale = 100;
+    int m_completionHintCount = 0;
     quint64 m_sourceGeneration = 0;
     QPointer<QNetworkReply> m_sourceReply;
     QPointer<RealtimeSocket> m_sourceSocket;

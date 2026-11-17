@@ -5,6 +5,7 @@ An independent native Overleaf client for Aurora OS.
 - The interface is available in English and Russian, following the system language.
 - Sign in to Overleaf Cloud or a self-hosted server, browse projects and edit files.
 - Save and compile LaTeX with a PDF preview and two-way SyncTeX navigation.
+- Use Ctrl+S to save and compile, or Ctrl++ / Ctrl+- and Ctrl+mouse wheel to zoom the editor or PDF.
 - Local LaTeX hints appear as you type commands; press Tab to accept them. On their own line, `\eqn`, `\equ`, `\tab` and `\fig` expand into blocks.
 - The cover shows recent edits or the project list. Open the cached PDF in another app or download a ZIP of the saved server project to Downloads from the cover or editor menu.
 - Drafts are stored locally; conflicting server changes stop a save. Binary files open as temporary copies and are not uploaded.

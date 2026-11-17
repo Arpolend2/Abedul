@@ -152,6 +152,10 @@ Page {
         return null
     }
     readonly property string latexCompletion: latexSuggestion ? latexSuggestion.completion : ""
+    readonly property bool completionAvailable: editor._editor.activeFocus && !!latexSuggestion
+    property bool completionTabHintActive: false
+    property bool completionWasAvailable: false
+    onCompletionAvailableChanged: completionHintUpdate.restart()
     property var coverPdfSnapshot: null
     property string coverPdfError: ""
     property int coverPdfRevision: 0
@@ -554,6 +558,20 @@ Page {
         onTriggered: page.saveDraft()
     }
     Timer {
+        id: completionHintUpdate
+        interval: 0
+        onTriggered: {
+            if (page.completionAvailable && !page.completionWasAvailable) {
+                page.completionTabHintActive = overleafClient.completionHintCount < 5
+                if (page.completionTabHintActive)
+                    overleafClient.recordCompletionHintShown()
+            } else if (!page.completionAvailable) {
+                page.completionTabHintActive = false
+            }
+            page.completionWasAvailable = page.completionAvailable
+        }
+    }
+    Timer {
         id: coverSnippetTimer
         interval: 0
         onTriggered: page.updateCoverSnippet()
@@ -728,7 +746,10 @@ Page {
                             visible: editor._editor.activeFocus && !!page.latexSuggestion
                                      && (editor._editor.cursorPosition === editor._editor.length
                                          || editor._editor.text.charAt(editor._editor.cursorPosition) === "\n")
-                            text: page.latexSuggestion ? page.latexSuggestion.display : ""
+                            text: page.latexSuggestion
+                                  ? page.latexSuggestion.display
+                                    + (page.completionTabHintActive ? "  <- " + qsTr("Press Tab to accept") : "")
+                                  : ""
                             font: editor._editor.font
                             color: editor.color
                             opacity: 0.65
@@ -748,17 +769,21 @@ Page {
                                ? Math.max(0, cursorPoint.y + editor._editor.cursorRectangle.height)
                                : Math.max(0, cursorPoint.y - height)
                             width: Math.min(codePane.width, popupText.implicitWidth + Theme.paddingMedium * 2)
-                            height: popupText.implicitHeight + Theme.paddingSmall * 2
+                            height: popupText.height + Theme.paddingSmall * 2
                             z: 3
                             color: page.editorBackground
                             border.color: editor.color
-                            visible: editor._editor.activeFocus && !!page.latexSuggestion && !completionHint.visible
+                            visible: page.completionAvailable && !completionHint.visible
                             Text {
                                 id: popupText
+                                objectName: "latexCompletionPopupText"
                                 anchors.centerIn: parent
                                 width: Math.min(implicitWidth, parent.width - Theme.paddingMedium * 2)
-                                clip: true
-                                text: page.latexSuggestion ? page.latexSuggestion.display : ""
+                                wrapMode: Text.Wrap
+                                text: page.latexSuggestion
+                                      ? page.latexSuggestion.display
+                                        + (page.completionTabHintActive ? "  <- " + qsTr("Press Tab to accept") : "")
+                                      : ""
                                 font: editor._editor.font
                                 color: editor.color
                             }
@@ -857,7 +882,7 @@ Page {
                         wrapMode: Text.Wrap
                         color: Theme.secondaryColor
                         font.pixelSize: Theme.fontSizeSmall
-                        text: qsTr("Pull down from the top to save and compile again.")
+                        text: qsTr("Pull down from the top or press Ctrl+S to save and compile again.")
                         opacity: compileHintTimer.running && overleafClient.pdfPath.length ? 1 : 0
                         visible: opacity > 0
                         Behavior on opacity { NumberAnimation { duration: 250 } }
