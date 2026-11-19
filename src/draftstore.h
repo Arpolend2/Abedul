@@ -19,6 +19,7 @@ public:
     bool exists() const;
     QString baseText() const;
     bool baseKnown() const;
+    void setAccount(const QString &server, const QString &userId);
     Q_INVOKABLE bool load(const QString &server, const QString &projectId);
     Q_INVOKABLE bool save(const QString &server, const QString &projectId, const QString &text);
     Q_INVOKABLE bool loadFile(const QString &server, const QString &projectId, const QString &path);
@@ -42,6 +43,9 @@ private:
     void setError(const QString &error);
     bool saveRecord(const QString &server, const QString &projectId, const QJsonObject &record);
     QString m_directory;
+    QString m_accountServer;
+    QString m_accountUser;
+    bool m_accountScoped = false;
     QString m_text;
     QString m_baseText;
     bool m_baseKnown = false;

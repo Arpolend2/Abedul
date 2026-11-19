@@ -25,6 +25,24 @@ bool DraftStore::exists() const { return m_exists; }
 QString DraftStore::baseText() const { return m_baseText; }
 bool DraftStore::baseKnown() const { return m_baseKnown; }
 
+void DraftStore::setAccount(const QString &server, const QString &userId)
+{
+    if (m_accountScoped && m_accountServer == server && m_accountUser == userId)
+        return;
+    m_accountScoped = true;
+    m_accountServer = server;
+    m_accountUser = userId;
+    m_text.clear();
+    m_baseText.clear();
+    m_baseKnown = false;
+    emit textChanged();
+    if (m_exists) {
+        m_exists = false;
+        emit existsChanged();
+    }
+    setError(QString());
+}
+
 bool DraftStore::loadFile(const QString &server, const QString &projectId, const QString &path)
 {
     if (projectId.isEmpty() || path.isEmpty() || projectId.contains(QChar::Null) || path.contains(QChar::Null)) {
@@ -89,7 +107,7 @@ QString DraftStore::loadLastFile(const QString &server, const QString &projectId
 
 bool DraftStore::saveLastFile(const QString &server, const QString &projectId, const QString &path)
 {
-    if (projectId.isEmpty() || projectId.contains(QChar::Null) || path.isEmpty() || path.contains(QChar::Null)) {
+    if (projectId.isEmpty() || projectId.contains(QChar::Null) || path.contains(QChar::Null)) {
         setError(tr("Invalid project for last opened file."));
         return false;
     }
@@ -105,7 +123,7 @@ QString DraftStore::loadLastProject(const QString &server)
 
 bool DraftStore::saveLastProject(const QString &server, const QString &projectId)
 {
-    if (projectId.isEmpty() || projectId.contains(QChar::Null)) {
+    if (projectId.contains(QChar::Null)) {
         setError(tr("Invalid last opened project."));
         return false;
     }
@@ -124,11 +142,20 @@ QString DraftStore::filePath(const QString &server, const QString &projectId) co
 {
     if (server.isEmpty() || projectId.isEmpty())
         return QString();
+    QString directory = m_directory;
+    if (m_accountScoped) {
+        if (m_accountUser.isEmpty() || server != m_accountServer)
+            return QString();
+        const QByteArray accountKey = server.toUtf8() + '\0' + m_accountUser.toUtf8();
+        directory = QDir(directory).filePath(QStringLiteral("projects-")
+                    + QString::fromLatin1(QCryptographicHash::hash(accountKey, QCryptographicHash::Sha256).toHex())
+                    + QStringLiteral(".json"));
+    }
     QByteArray key = server.toUtf8();
     key.append('\0');
     key.append(projectId.toUtf8());
     const QByteArray hash = QCryptographicHash::hash(key, QCryptographicHash::Sha256).toHex();
-    return QDir(m_directory).filePath(QString::fromLatin1(hash) + QStringLiteral(".json"));
+    return QDir(directory).filePath(QString::fromLatin1(hash) + QStringLiteral(".json"));
 }
 
 bool DraftStore::load(const QString &server, const QString &projectId)
@@ -198,7 +225,7 @@ bool DraftStore::saveRecord(const QString &server, const QString &projectId, con
         setError(tr("Invalid project for local draft."));
         return false;
     }
-    if (!QDir().mkpath(m_directory)) {
+    if (!QDir().mkpath(QFileInfo(path).absolutePath())) {
         setError(tr("Cannot create the local drafts directory."));
         return false;
     }

@@ -33,6 +33,21 @@
     </message>
 </context>
 <context>
+    <name>BackgroundLogin</name>
+    <message>
+        <source>Could not read the saved sign-in. Cached projects remain available.</source>
+        <translation>Не удалось прочитать данные входа. Сохранённые проекты по-прежнему доступны.</translation>
+    </message>
+    <message>
+        <source>Reading the saved sign-in timed out. Cached projects remain available.</source>
+        <translation>Время чтения данных входа истекло. Сохранённые проекты по-прежнему доступны.</translation>
+    </message>
+    <message>
+        <source>Sign in again to update cached projects.</source>
+        <translation>Войдите снова, чтобы обновить сохранённые проекты.</translation>
+    </message>
+</context>
+<context>
     <name>CompileRootPage</name>
     <message>
         <source>Choose main document</source>
@@ -127,6 +142,28 @@
 </context>
 <context>
     <name>EditorPage</name>
+    <message>
+        <source>SyncTeX is not available offline.</source>
+        <translation>SyncTeX недоступен без подключения к сети.</translation>
+    </message>
+    <message><source>Showing a local copy while updating…</source><translation>Показана локальная копия, файл обновляется…</translation></message>
+    <message><source>Showing a local copy; it may be out of date.</source><translation>Показана локальная копия; она может быть устаревшей.</translation></message>
+    <message><source>Find and replace</source><translation>Поиск и замена</translation></message>
+    <message><source>Find</source><translation>Найти</translation></message>
+    <message><source>Replace with</source><translation>Заменить на</translation></message>
+    <message><source>Previous</source><translation>Назад</translation></message>
+    <message><source>Next</source><translation>Далее</translation></message>
+    <message><source>Replace</source><translation>Заменить</translation></message>
+    <message><source>Replace all</source><translation>Заменить всё</translation></message>
+    <message><source>Close</source><translation>Закрыть</translation></message>
+    <message><source>No matches found.</source><translation>Совпадений не найдено.</translation></message>
+    <message><source>Could not replace the match.</source><translation>Не удалось заменить совпадение.</translation></message>
+    <message><source>Replaced %1 matches.</source><translation>Заменено совпадений: %1.</translation></message>
+    <message><source>Search is case-sensitive and applies to the current file.</source><translation>Поиск учитывает регистр и выполняется в текущем файле.</translation></message>
+    <message><source>Sharing</source><translation>Доступ</translation></message>
+    <message><source>History</source><translation>История изменений</translation></message>
+    <message><source>Comments</source><translation>Комментарии</translation></message>
+    <message><source>Chat</source><translation>Чат</translation></message>
     <message>
         <source>Press Tab to accept</source>
         <translation>Нажмите Tab, чтобы принять подсказку</translation>
@@ -238,6 +275,19 @@
 </context>
 <context>
     <name>LoginPage</name>
+    <message><source>Delete</source><translation>Удалить</translation></message>
+    <message><source>Delete account</source><translation>Удалить учётную запись</translation></message>
+    <message><source>Delete server</source><translation>Удалить сервер</translation></message>
+    <message><source>Delete %1 and its saved session, cached files and account drafts? Browser cookies are kept.</source><translation>Удалить %1, сохранённый сеанс, кэшированные файлы и черновики учётной записи? Cookies браузера сохранятся.</translation></message>
+    <message><source>Delete %1, all its accounts, saved files, drafts and browser cookies? Shared domain cookies may also affect other servers.</source><translation>Удалить %1, все его учётные записи, сохранённые файлы, черновики и cookies браузера? Общие cookies домена могут использоваться и другими серверами.</translation></message>
+    <message>
+        <source>Saved accounts</source>
+        <translation>Сохранённые учётные записи</translation>
+    </message>
+    <message>
+        <source>Offline accounts</source>
+        <translation>Учётные записи для работы без сети</translation>
+    </message>
     <message>
         <source>Server address</source>
         <translation>Адрес сервера</translation>
@@ -259,7 +309,93 @@
     </message>
 </context>
 <context>
+    <name>ServerCookieRemoval</name>
+    <message><source>Could not verify browser cookie removal. The server was not removed.</source><translation>Не удалось проверить удаление cookies браузера. Сервер не удалён.</translation></message>
+    <message><source>Some browser cookies could not be removed. The server was not removed.</source><translation>Не удалось удалить некоторые cookies браузера. Сервер не удалён.</translation></message>
+    <message><source>Cannot access browser cookies. Open the sign-in page and try again.</source><translation>Не удалось получить доступ к cookies браузера. Откройте страницу входа и повторите попытку.</translation></message>
+    <message><source>Could not remove browser cookies. The server was not removed.</source><translation>Не удалось удалить cookies браузера. Сервер не удалён.</translation></message>
+    <message><source>Removing browser cookies timed out. The server was not removed.</source><translation>Время удаления cookies браузера истекло. Сервер не удалён.</translation></message>
+</context>
+<context>
+    <name>ServerCookieRemovalService</name>
+    <message><source>Could not load browser cookie removal.</source><translation>Не удалось запустить удаление cookies браузера.</translation></message>
+    <message><source>Could not start the browser to remove cookies.</source><translation>Не удалось запустить браузер для удаления cookies.</translation></message>
+</context>
+<context>
     <name>OverleafClient</name>
+    <message><source>Could not load browser cookie removal.</source><translation>Не удалось запустить удаление cookies браузера.</translation></message>
+    <message><source>Could not locate the account cache.</source><translation>Не удалось найти кэш учётной записи.</translation></message>
+    <message><source>Wait for the current operation before removing the account.</source><translation>Дождитесь завершения операции перед удалением учётной записи.</translation></message>
+    <message><source>Could not safely access the account cache.</source><translation>Не удалось безопасно получить доступ к кэшу учётной записи.</translation></message>
+    <message><source>Could not remove the account's saved files: %1</source><translation>Не удалось удалить сохранённые файлы учётной записи: %1</translation></message>
+    <message><source>This saved account no longer exists.</source><translation>Эта сохранённая учётная запись больше не существует.</translation></message>
+    <message><source>Could not update the saved account list.</source><translation>Не удалось обновить список сохранённых учётных записей.</translation></message>
+    <message><source>This saved server no longer exists.</source><translation>Этот сохранённый сервер больше не существует.</translation></message>
+    <message><source>Could not protect the saved sign-in directory.</source><translation>Не удалось защитить каталог сохранённого сеанса.</translation></message>
+    <message><source>Could not create the saved sign-in file.</source><translation>Не удалось создать файл сохранённого сеанса.</translation></message>
+    <message><source>Could not save the sign-in session.</source><translation>Не удалось сохранить сеанс входа.</translation></message>
+    <message><source>Saved sign-in is missing or not private. Sign in again to enable reconnection.</source><translation>Сохранённый сеанс отсутствует или не защищён. Войдите снова для автоматического подключения.</translation></message>
+    <message><source>Could not read the saved sign-in. Cached projects remain available.</source><translation>Не удалось прочитать сохранённый сеанс. Сохранённые проекты по-прежнему доступны.</translation></message>
+    <message><source>The saved sign-in is invalid. Sign in again to enable reconnection.</source><translation>Сохранённый сеанс недействителен. Войдите снова для автоматического подключения.</translation></message>
+    <message>
+        <source>The server session belongs to a different account. Cached projects remain available.</source>
+        <translation>Сеанс сервера принадлежит другой учётной записи. Сохранённые проекты по-прежнему доступны.</translation>
+    </message>
+    <message>
+        <source>This offline account is not available.</source>
+        <translation>Эта учётная запись недоступна без подключения к сети.</translation>
+    </message>
+    <message>
+        <source>Could not read the cached project list.</source>
+        <translation>Не удалось прочитать сохранённый список проектов.</translation>
+    </message>
+    <message>
+        <source>This operation is not available offline.</source>
+        <translation>Это действие недоступно без подключения к сети.</translation>
+    </message>
+    <message>
+        <source>This file is not available offline.</source>
+        <translation>Этот файл недоступен без подключения к сети.</translation>
+    </message>
+    <message>
+        <source>Could not copy the cached file.</source>
+        <translation>Не удалось скопировать сохранённый файл.</translation>
+    </message>
+    <message>
+        <source>This document is not available offline.</source>
+        <translation>Этот документ недоступен без подключения к сети.</translation>
+    </message>
+    <message>
+        <source>Could not read the cached document.</source>
+        <translation>Не удалось прочитать сохранённый документ.</translation>
+    </message>
+    <message>
+        <source>The project file list is not available offline.</source>
+        <translation>Список файлов проекта недоступен без подключения к сети.</translation>
+    </message>
+    <message>
+        <source>Could not read the cached project file list.</source>
+        <translation>Не удалось прочитать сохранённый список файлов проекта.</translation>
+    </message>
+    <message><source>Could not read the cached PDF.</source><translation>Не удалось прочитать сохранённый PDF.</translation></message>
+    <message><source>Could not cache the PDF.</source><translation>Не удалось сохранить PDF в кэш.</translation></message>
+    <message><source>The file changed on the server. Refresh and try again.</source><translation>Файл на сервере изменился. Обновите список и попробуйте снова.</translation></message>
+    <message><source>This project action is not available. Refresh the list and sign in again.</source><translation>Это действие недоступно. Обновите список и войдите снова.</translation></message>
+    <message><source>Could not update the project (HTTP %1).</source><translation>Не удалось изменить проект (HTTP %1).</translation></message>
+    <message><source> The action may have succeeded; refresh before retrying.</source><translation> Возможно, действие выполнено; обновите список перед повторной попыткой.</translation></message>
+    <message><source>Enter a project name and sign in first.</source><translation>Войдите в аккаунт и введите название проекта.</translation></message>
+    <message><source>Could not create the project (HTTP %1).</source><translation>Не удалось создать проект (HTTP %1).</translation></message>
+    <message><source> The project may have been created; refresh before retrying.</source><translation> Возможно, проект создан; обновите список перед повторной попыткой.</translation></message>
+    <message><source>The server returned an invalid response. Refresh before retrying.</source><translation>Сервер вернул некорректный ответ. Обновите список перед повторной попыткой.</translation></message>
+    <message><source>File operation timed out. Refresh to check the server state.</source><translation>Время операции с файлом истекло. Обновите список, чтобы проверить состояние на сервере.</translation></message>
+    <message><source>Invalid file name or project.</source><translation>Недопустимое имя файла или проект.</translation></message>
+    <message><source>Could not read the selected local file.</source><translation>Не удалось прочитать выбранный файл на устройстве.</translation></message>
+    <message><source>The server returned an invalid project file tree.</source><translation>Сервер вернул некорректное дерево файлов проекта.</translation></message>
+    <message><source>The project file list changed. Refresh it before trying again.</source><translation>Список файлов проекта изменился. Обновите его перед повторной попыткой.</translation></message>
+    <message><source>Could not obtain a security token for the file operation.</source><translation>Не удалось получить токен безопасности для операции с файлом.</translation></message>
+    <message><source>An item with this name already exists.</source><translation>Объект с таким именем уже существует.</translation></message>
+    <message><source>File operation failed (HTTP %1). Refresh to check the server state.</source><translation>Ошибка операции с файлом (HTTP %1). Обновите список, чтобы проверить состояние на сервере.</translation></message>
+    <message><source>The server rejected the upload. Refresh to check the server state.</source><translation>Сервер отклонил загрузку. Обновите список, чтобы проверить состояние на сервере.</translation></message>
     <message>
         <source>Project ZIP downloaded</source>
         <translation>ZIP-архив проекта загружен</translation>
@@ -493,7 +629,80 @@
     </message>
 </context>
 <context>
+    <name>ProjectCollaboration</name>
+    <message><source>Change preview unavailable</source><translation>Просмотр изменений недоступен</translation></message>
+    <message><source>Edited</source><translation>Изменён</translation></message>
+    <message><source>Created</source><translation>Создан</translation></message>
+    <message><source>Deleted</source><translation>Удалён</translation></message>
+    <message><source>Renamed</source><translation>Переименован</translation></message>
+    <message><source>Unknown collaborator</source><translation>Неизвестный участник</translation></message>
+    <message><source>Can edit</source><translation>Может редактировать</translation></message>
+    <message><source>Can view</source><translation>Может просматривать</translation></message>
+    <message><source>Owner</source><translation>Владелец</translation></message>
+    <message><source>Access not specified</source><translation>Права доступа не указаны</translation></message>
+    <message><source>Invalid project or session. Sign in again.</source><translation>Недопустимый проект или сеанс. Войдите снова.</translation></message>
+    <message><source>The session changed. Reopen this page.</source><translation>Сеанс изменился. Откройте страницу заново.</translation></message>
+    <message><source>Server request failed (HTTP %1).</source><translation>Ошибка запроса к серверу (HTTP %1).</translation></message>
+    <message><source>Network request failed: %1</source><translation>Ошибка сетевого запроса: %1</translation></message>
+    <message><source>Server redirected the request. Sign in again.</source><translation>Сервер перенаправил запрос. Войдите снова.</translation></message>
+    <message><source>The server may have received the request; check before retrying.</source><translation>Возможно, сервер получил запрос; проверьте это перед повторной попыткой.</translation></message>
+    <message><source>The server returned an unsupported response.</source><translation>Сервер вернул неподдерживаемый ответ.</translation></message>
+    <message><source>Versions %1–%2</source><translation>Версии %1–%2</translation></message>
+    <message><source>Project structure changed</source><translation>Структура проекта изменена</translation></message>
+    <message><source>Resolved</source><translation>Закрыт</translation></message>
+    <message><source>Open</source><translation>Открыт</translation></message>
+    <message><source>Enter a value first.</source><translation>Сначала введите значение.</translation></message>
+    <message><source>Select a comment thread first.</source><translation>Сначала выберите обсуждение.</translation></message>
+    <message><source>Could not obtain a CSRF token. Sign in again.</source><translation>Не удалось получить токен CSRF. Войдите снова.</translation></message>
+    <message><source>Invitation was not created. The server may limit collaborators.</source><translation>Приглашение не создано. Возможно, сервер ограничивает число участников.</translation></message>
+    <message><source>Invitation was not created: %1</source><translation>Приглашение не создано: %1</translation></message>
+    <message><source>Sent.</source><translation>Отправлено.</translation></message>
+</context>
+<context>
+    <name>ProjectCollaborationPage</name>
+    <message><source>Invited collaborators with access to this project.</source><translation>Приглашённые участники, у которых есть доступ к проекту.</translation></message>
+    <message><source>No collaborators</source><translation>Нет участников</translation></message>
+    <message><source>Collaborators</source><translation>Участники</translation></message>
+    <message><source>Invite a collaborator</source><translation>Пригласить участника</translation></message>
+    <message><source>Refresh</source><translation>Обновить</translation></message>
+    <message><source>Sharing</source><translation>Доступ</translation></message>
+    <message><source>History</source><translation>История изменений</translation></message>
+    <message><source>Comments</source><translation>Комментарии</translation></message>
+    <message><source>Chat</source><translation>Чат</translation></message>
+    <message><source>Inviting collaborators requires project administrator access.</source><translation>Для приглашения участников нужны права администратора проекта.</translation></message>
+    <message><source>Recent server history only. Restore and older history are not available here.</source><translation>Показана только недавняя история сервера. Восстановление и более ранняя история недоступны.</translation></message>
+    <message><source>Select a thread to reply. New comments and document positions are not supported here; the server may not provide comments.</source><translation>Выберите обсуждение для ответа. Создание комментариев и их расположение в документе здесь не поддерживаются; сервер может не предоставлять комментарии.</translation></message>
+    <message><source>Refresh to see new messages. Messages are not updated live.</source><translation>Обновите страницу, чтобы увидеть новые сообщения. Автоматического обновления нет.</translation></message>
+    <message><source>Loading…</source><translation>Загрузка…</translation></message>
+    <message><source>No entries</source><translation>Нет записей</translation></message>
+    <message><source>Selected thread: %1</source><translation>Выбрано обсуждение: %1</translation></message>
+    <message><source>Read-only access</source><translation>Только чтение</translation></message>
+    <message><source>Email</source><translation>Электронная почта</translation></message>
+    <message><source>Message</source><translation>Сообщение</translation></message>
+    <message><source>Send invitation</source><translation>Отправить приглашение</translation></message>
+    <message><source>Send</source><translation>Отправить</translation></message>
+</context>
+<context>
     <name>ProjectFilesPage</name>
+    <message><source>Upload files</source><translation>Загрузить файлы</translation></message>
+    <message><source>Select files to upload</source><translation>Выберите файлы для загрузки</translation></message>
+    <message><source>Replace file</source><translation>Заменить файл</translation></message>
+    <message><source>Replace the existing file %1?</source><translation>Заменить существующий файл %1?</translation></message>
+    <message><source>Could not read the selected local file.</source><translation>Не удалось прочитать выбранный файл.</translation></message>
+    <message><source>Could not reopen the replaced document.</source><translation>Не удалось повторно открыть заменённый документ.</translation></message>
+    <message><source>Save the current draft before changing project files.</source><translation>Сохраните текущий черновик перед изменением файлов проекта.</translation></message>
+    <message><source>Close this document in the editor before changing it.</source><translation>Закройте этот документ в редакторе перед изменением.</translation></message>
+    <message><source>Could not save the open document before changing it.</source><translation>Не удалось сохранить открытый документ перед изменением.</translation></message>
+    <message><source>The open document changed while saving. Try again.</source><translation>Открытый документ изменился во время сохранения. Повторите попытку.</translation></message>
+    <message><source>A local draft exists for this document. It was kept; this operation is blocked.</source><translation>Для этого документа есть локальный черновик. Он сохранён, операция заблокирована.</translation></message>
+    <message><source>Select a file to upload</source><translation>Выберите файл для загрузки</translation></message>
+    <message><source>Rename</source><translation>Переименовать</translation></message>
+    <message><source>Name</source><translation>Имя</translation></message>
+    <message><source>Delete</source><translation>Удалить</translation></message>
+    <message><source>Delete %1 from the project? Folders and their contents will be deleted.</source><translation>Удалить %1 из проекта? Папки будут удалены вместе с содержимым.</translation></message>
+    <message><source>Up one folder</source><translation>На уровень выше</translation></message>
+    <message><source>Working…</source><translation>Выполнение…</translation></message>
+    <message><source>Upload file</source><translation>Загрузить файл</translation></message>
     <message>
         <source>Could not open the file: %1</source>
         <translation>Не удалось открыть файл: %1</translation>
@@ -501,10 +710,6 @@
     <message>
         <source>Project files</source>
         <translation>Файлы проекта</translation>
-    </message>
-    <message>
-        <source>Documents open in the editor. Other files open as temporary copies; changes are not synced back.</source>
-        <translation>Документы открываются в редакторе. Остальные файлы открываются как временные копии; изменения не синхронизируются с сервером.</translation>
     </message>
     <message>
         <source>Opening file…</source>
@@ -544,6 +749,30 @@
 </context>
 <context>
     <name>ProjectsPage</name>
+    <message>
+        <source>Connecting in the background…</source>
+        <translation>Подключение в фоновом режиме…</translation>
+    </message>
+    <message>
+        <source>Offline: cached projects may be out of date.</source>
+        <translation>Без сети: сохранённый список проектов может быть устаревшим.</translation>
+    </message>
+    <message><source>Showing cached projects while updating…</source><translation>Показаны сохранённые проекты, список обновляется…</translation></message>
+    <message><source>Showing cached projects. Refresh to update.</source><translation>Показаны сохранённые проекты. Обновите список для актуализации.</translation></message>
+    <message><source>Refresh</source><translation>Обновить</translation></message>
+    <message><source>Trash</source><translation>Корзина</translation></message>
+    <message><source>Trash is empty</source><translation>Корзина пуста</translation></message>
+    <message><source>Move to trash</source><translation>В корзину</translation></message>
+    <message><source>Restore</source><translation>Восстановить</translation></message>
+    <message><source>Delete permanently</source><translation>Удалить навсегда</translation></message>
+    <message><source>Move</source><translation>Переместить</translation></message>
+    <message><source>Delete</source><translation>Удалить</translation></message>
+    <message><source>Move “%1” to the trash? You can restore it later.</source><translation>Переместить «%1» в корзину? Позже его можно восстановить.</translation></message>
+    <message><source>Permanently delete “%1”? This cannot be undone.</source><translation>Удалить «%1» навсегда? Это действие нельзя отменить.</translation></message>
+    <message><source>New project</source><translation>Новый проект</translation></message>
+    <message><source>Project name</source><translation>Название проекта</translation></message>
+    <message><source>Untitled project</source><translation>Без названия</translation></message>
+    <message><source>Creating project…</source><translation>Создание проекта…</translation></message>
     <message>
         <source>Archived projects</source>
         <translation>Архивные проекты</translation>
@@ -634,6 +863,12 @@
 </context>
 <context>
     <name>SettingsPage</name>
+    <message><source>About</source><translation>О приложении</translation></message>
+    <message><source>Abedul is an independent native Overleaf client for Aurora OS.</source><translation>Abedul — независимый нативный клиент Overleaf для ОС Аврора.</translation></message>
+    <message><source>Version: %1</source><translation>Версия: %1</translation></message>
+    <message><source>Source repository</source><translation>Репозиторий исходного кода</translation></message>
+    <message><source>References and third-party components:</source><translation>Использованные материалы и сторонние компоненты:</translation></message>
+    <message><source>This software is based in part on the work of the Independent JPEG Group.</source><translation>Это приложение частично основано на работе Independent JPEG Group.</translation></message>
     <message>
         <source>Press Ctrl+S to save and compile.</source>
         <translation>Нажмите Ctrl+S, чтобы сохранить и скомпилировать.</translation>
@@ -661,6 +896,10 @@
 </context>
 <context>
     <name>SocketProtocol</name>
+    <message><source>The server returned an invalid project file tree.</source><translation>Сервер вернул некорректное дерево файлов проекта.</translation></message>
+    <message><source>The server returned an invalid main document.</source><translation>Сервер вернул некорректные данные о главном документе.</translation></message>
+    <message><source>The project's main document was not found. Choose a file.</source><translation>Главный документ проекта не найден. Выберите файл.</translation></message>
+    <message><source>Could not determine the main document. Choose a file.</source><translation>Не удалось определить главный документ. Выберите файл.</translation></message>
     <message>
         <source>Could not find the selected file in the project.</source>
         <translation>Не удалось найти выбранный файл в проекте.</translation>
@@ -750,6 +989,10 @@
 </context>
 <context>
     <name>WebLoginPage</name>
+    <message>
+        <source>View offline accounts</source>
+        <translation>Учётные записи без сети</translation>
+    </message>
     <message>
         <source>Unable to read browser cookies.</source>
         <translation>Не удалось прочитать файлы cookie браузера.</translation>

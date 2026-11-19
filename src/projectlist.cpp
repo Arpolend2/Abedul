@@ -50,6 +50,7 @@ bool parseProjectList(const QByteArray &json, QVariantList *projects, QString *e
         item.insert(QStringLiteral("name"), name);
         item.insert(QStringLiteral("archived"), project.value(QStringLiteral("archived")).toBool());
         item.insert(QStringLiteral("trashed"), project.value(QStringLiteral("trashed")).toBool());
+        item.insert(QStringLiteral("accessLevel"), project.value(QStringLiteral("accessLevel")).toString());
         result.append(item);
     }
     *projects = result;

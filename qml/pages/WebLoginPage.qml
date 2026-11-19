@@ -8,6 +8,7 @@ Page {
     property string message: ""
     property bool cookieRequestPending: false
     property bool cookieRequestAutomatic: false
+    property bool automaticCookieDeferred: false
     property bool restoringSession: false
 
     function showLogin() {
@@ -18,10 +19,19 @@ Page {
     function requestCookies(automatic) {
         if (cookieRequestPending || overleafClient.busy || overleafClient.authenticated)
             return
+        if (overleafClient.backgroundCookiePending || overleafClient.interactiveCookiePending
+                || overleafClient.serverRemovalPending) {
+            if (automatic)
+                automaticCookieDeferred = true
+            return
+        }
+        automaticCookieDeferred = false
         cookieRequestPending = true
         cookieRequestAutomatic = automatic
+        overleafClient.setInteractiveCookiePending(true)
         if (!CookieManager.retrieveUrlCookies(overleafClient.server + "/project", true)) {
             cookieRequestPending = false
+            overleafClient.setInteractiveCookiePending(false)
             message = qsTr("Unable to read browser cookies.")
             if (automatic)
                 showLogin()
@@ -40,6 +50,8 @@ Page {
             anchors.horizontalCenter: parent.horizontalCenter
             text: overleafClient.busy ? qsTr("Loading projects…") : qsTr("Continue after sign-in")
             enabled: !overleafClient.busy && !page.cookieRequestPending
+                     && !overleafClient.backgroundCookiePending && !overleafClient.interactiveCookiePending
+                     && !overleafClient.serverRemovalPending
             onClicked: page.requestCookies(false)
         }
         Label {
@@ -115,6 +127,7 @@ Page {
             if (!page.cookieRequestPending)
                 return
             page.cookieRequestPending = false
+            overleafClient.setInteractiveCookiePending(false)
             cookieTimeout.stop()
             if (page.cookieRequestAutomatic && !overleafClient.isProjectListUrl(loginWebView.url))
                 return
@@ -127,6 +140,9 @@ Page {
     }
     Connections {
         target: overleafClient
+        onBackgroundCookiePendingChanged: deferredCookies.restart()
+        onInteractiveCookiePendingChanged: deferredCookies.restart()
+        onServerRemovalPendingChanged: deferredCookies.restart()
         onAuthenticatedChanged: {
             if (overleafClient.authenticated) {
                 restoreTimeout.stop()
@@ -134,5 +150,16 @@ Page {
             }
         }
         onErrorChanged: if (page.restoringSession && overleafClient.error.length) page.showLogin()
+    }
+    Timer {
+        id: deferredCookies
+        interval: 1
+        onTriggered: {
+            if (page.automaticCookieDeferred && !overleafClient.backgroundCookiePending
+                    && !overleafClient.interactiveCookiePending
+                    && !overleafClient.serverRemovalPending
+                    && overleafClient.isProjectListUrl(loginWebView.url))
+                page.requestCookies(true)
+        }
     }
 }

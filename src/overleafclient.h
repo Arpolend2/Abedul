@@ -11,11 +11,14 @@
 
 class QNetworkReply;
 class RealtimeSocket;
+class QJsonObject;
+class ProjectCollaboration;
 
 class OverleafClient : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(QString server READ server NOTIFY serverChanged)
+    Q_PROPERTY(QString userId READ userId NOTIFY accountChanged)
     Q_PROPERTY(QString rememberedServer READ rememberedServer NOTIFY rememberedServerChanged)
     Q_PROPERTY(QStringList rememberedServers READ rememberedServers NOTIFY rememberedServersChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
@@ -41,9 +44,22 @@ class OverleafClient : public QObject
     Q_PROPERTY(bool pdfOnLeft READ pdfOnLeft WRITE setPdfOnLeft NOTIFY pdfOnLeftChanged)
     Q_PROPERTY(int editorFontScale READ editorFontScale WRITE setEditorFontScale NOTIFY editorFontScaleChanged)
     Q_PROPERTY(int completionHintCount READ completionHintCount NOTIFY completionHintCountChanged)
+    Q_PROPERTY(QObject *collaboration READ collaboration CONSTANT)
+    Q_PROPERTY(bool projectCreationBusy READ projectCreationBusy NOTIFY projectCreationChanged)
+    Q_PROPERTY(QString projectCreationError READ projectCreationError NOTIFY projectCreationChanged)
+    Q_PROPERTY(QString projectActionError READ projectActionError NOTIFY projectActionChanged)
+    Q_PROPERTY(bool commentsAvailable READ commentsAvailable NOTIFY commentsAvailableChanged)
+    Q_PROPERTY(bool projectsCached READ projectsCached NOTIFY projectsCachedChanged)
+    Q_PROPERTY(bool offline READ offline NOTIFY offlineChanged)
+    Q_PROPERTY(QVariantList cachedAccounts READ cachedAccounts NOTIFY cachedAccountsChanged)
+    Q_PROPERTY(bool backgroundCookiePending READ backgroundCookiePending NOTIFY backgroundCookiePendingChanged)
+    Q_PROPERTY(bool interactiveCookiePending READ interactiveCookiePending NOTIFY interactiveCookiePendingChanged)
+    Q_PROPERTY(bool autoRestoreServer READ autoRestoreServer NOTIFY rememberedServerChanged)
+    Q_PROPERTY(bool serverRemovalPending READ serverRemovalPending NOTIFY serverRemovalPendingChanged)
 public:
     explicit OverleafClient(QObject *parent = nullptr);
     QString server() const;
+    QString userId() const;
     QString rememberedServer() const;
     QStringList rememberedServers() const;
     QString error() const;
@@ -73,14 +89,40 @@ public:
     void setEditorFontScale(int percent);
     int completionHintCount() const;
     Q_INVOKABLE void recordCompletionHintShown();
+    QObject *collaboration() const;
+    bool projectCreationBusy() const;
+    QString projectCreationError() const;
+    Q_INVOKABLE void createProject(const QString &name);
+    QString projectActionError() const;
+    Q_INVOKABLE void changeProjectTrash(const QString &projectId, const QString &action);
+    bool commentsAvailable() const;
+    Q_INVOKABLE void probeProjectComments(const QString &projectId);
+    bool projectsCached() const;
+    bool offline() const;
+    QVariantList cachedAccounts() const;
+    bool backgroundCookiePending() const;
+    Q_INVOKABLE void setBackgroundCookiePending(bool pending);
+    bool interactiveCookiePending() const;
+    Q_INVOKABLE void setInteractiveCookiePending(bool pending);
+    Q_INVOKABLE void reportConnectionError(const QString &message);
+    Q_INVOKABLE bool openOfflineAccount(const QString &server, const QString &userId);
+    Q_INVOKABLE void resumeSavedSession();
+    bool autoRestoreServer() const;
+    bool serverRemovalPending() const;
+    Q_INVOKABLE void setServerRemovalPending(bool pending);
+    Q_INVOKABLE bool removeCachedAccount(const QString &server, const QString &userId);
+    Q_INVOKABLE bool removeSavedServer(const QString &server);
+    Q_INVOKABLE void requestServerRemoval(const QString &server);
+    Q_INVOKABLE QString cookieRemovalUrl(const QString &server, const QString &domain, const QString &path) const;
+    Q_INVOKABLE void reportAccountRemovalError(const QString &message);
 
     Q_INVOKABLE bool setServer(const QString &address);
     Q_INVOKABLE bool isProjectListUrl(const QUrl &url) const;
-    Q_INVOKABLE bool confirmServerConnection(const QUrl &url, int httpStatusCode);
     Q_INVOKABLE void finishBrowserLogin(const QVariantList &cookies);
     Q_INVOKABLE void refreshProjects();
     Q_INVOKABLE void compileProjectPdf(const QString &projectId, const QString &rootPath);
     Q_INVOKABLE void closeProjectPdf();
+    Q_INVOKABLE void restoreProjectPdf(const QString &projectId);
     Q_INVOKABLE QUrl cachedPdfForExternalOpen();
     Q_INVOKABLE void setCoverEditor(QObject *editor);
     Q_INVOKABLE void downloadProjectArchive(const QString &projectId);
@@ -88,7 +130,17 @@ public:
     Q_INVOKABLE void syncPdfToSource(const QString &projectId, int page, double h, double v);
     Q_INVOKABLE void loadProjectFiles(const QString &projectId);
     Q_INVOKABLE void closeProjectFiles();
+    Q_INVOKABLE void loadProjectFileTree(const QString &projectId);
+    Q_INVOKABLE void renameProjectEntity(const QString &projectId, const QString &path,
+                                         const QString &type, const QString &name);
+    Q_INVOKABLE void deleteProjectEntity(const QString &projectId, const QString &path,
+                                         const QString &type);
+    Q_INVOKABLE void uploadProjectFile(const QString &projectId, const QString &folder,
+                                       const QUrl &localUrl);
+    Q_INVOKABLE void overwriteProjectFile(const QString &projectId, const QString &folder,
+                                          const QUrl &localUrl, const QString &id, const QString &type);
     Q_INVOKABLE void openProjectSource(const QString &projectId, const QString &path);
+    Q_INVOKABLE void openMainProjectSource(const QString &projectId);
     Q_INVOKABLE void openProjectFileExternally(const QString &projectId, const QString &path);
     Q_INVOKABLE void saveProjectSource(const QString &projectId, const QString &path,
                                        const QString &base, bool baseKnown, const QString &text);
@@ -96,6 +148,9 @@ public:
 
 signals:
     void serverChanged();
+    void accountChanged();
+    void serverRemovalRequested(const QString &server);
+    void serverRemovalPendingChanged();
     void rememberedServerChanged();
     void rememberedServersChanged();
     void errorChanged();
@@ -117,9 +172,23 @@ signals:
     void sourceErrorChanged();
     void sourceBusyChanged();
     void sourceSaved(const QString &path, const QString &text);
+    void projectFileOperationFinished(const QString &action, const QString &path,
+                                      const QString &type, const QString &newPath);
+    void projectFileOverwriteRequested(const QString &path, const QString &type, const QString &entityId);
     void pdfOnLeftChanged();
     void editorFontScaleChanged();
     void completionHintCountChanged();
+    void projectCreationChanged();
+    void projectActionChanged();
+    void projectTrashChanged(const QString &projectId, const QString &action);
+    void commentsAvailableChanged();
+    void projectsCachedChanged();
+    void offlineChanged();
+    void cachedAccountsChanged();
+    void reconnectRequested();
+    void reconnected();
+    void backgroundCookiePendingChanged();
+    void interactiveCookiePendingChanged();
     void syncPdfPositions(const QVariantList &positions);
     void syncSourcePositions(const QVariantList &positions);
     void syncError(const QString &message);
@@ -130,7 +199,18 @@ private:
     void setBusy(bool busy);
     QNetworkRequest request(const QString &path) const;
     bool checkReply(QNetworkReply *reply);
-    void loadProjects();
+    void loadProjects(bool reconnecting = false);
+    void writeProjectCache();
+    QString accountCachePath(const QString &server, const QString &userId) const;
+    QString projectResourcePath(const QString &projectId, const QString &kind, const QString &path = QString()) const;
+    bool writeCache(const QString &path, const QByteArray &data);
+    bool copyToCache(const QString &source, const QString &destination);
+    QString sessionFilePath() const;
+    bool saveSession(QString *error) const;
+    bool purgeAccountCache(const QString &server, const QString &userId);
+    void rememberCachedAccount();
+    QString projectPdfCachePath(const QString &projectId) const;
+    void rememberConnectedServer();
     void setPdfError(const QString &message);
     void setPdfBusy(bool busy);
     void downloadProjectPdf(const QByteArray &response, quint64 generation,
@@ -139,16 +219,38 @@ private:
     void sourceFailed(const QString &message);
     void startProjectSource(const QString &projectId, const QString &path, bool saving,
                             const QString &base, bool baseKnown, const QString &text,
-                            bool openingExternal = false);
+                            bool openingExternal = false, const QString &fileAction = QString(),
+                            const QString &fileType = QString(), const QString &fileName = QString(),
+                            const QUrl &localUrl = QUrl(), bool openingMain = false,
+                            const QString &overwriteId = QString(), const QString &overwriteType = QString());
+    void runFileAction(const QJsonObject &project, const QString &projectId,
+                       const QString &path, quint64 generation);
     void downloadExternalFile(const QString &projectId, const QString &fileId, const QString &path,
                               quint64 generation);
     void completeSourceSave();
 
     QNetworkAccessManager m_network;
+    ProjectCollaboration *m_collaboration = nullptr;
+    QPointer<QNetworkReply> m_createProjectReply;
+    QString m_projectCreationError;
+    QString m_projectActionError;
+    bool m_commentsAvailable = false;
+    quint64 m_commentsGeneration = 0;
+    QPointer<QNetworkReply> m_commentsReply;
+    QString m_projectCachePath;
+    QString m_userId;
+    QString m_userLabel;
+    QString m_sourceProject;
+    bool m_offline = false;
+    bool m_backgroundCookiePending = false;
+    bool m_interactiveCookiePending = false;
+    bool m_serverRemovalPending = false;
+    bool m_projectsCached = false;
     QUrl m_server;
     QString m_rememberedServer;
     QStringList m_rememberedServers;
     QByteArray m_cookieHeader;
+    QVariantList m_pendingSessionCookies;
     QByteArray m_csrf;
     QVariantList m_projects;
     QPointer<QObject> m_coverEditor;
@@ -191,6 +293,13 @@ private:
     QPointer<RealtimeSocket> m_sourceSocket;
     bool m_savingSource = false;
     bool m_openingExternal = false;
+    bool m_openingMainSource = false;
+    QString m_fileAction;
+    QString m_fileType;
+    QString m_fileName;
+    QUrl m_fileLocalUrl;
+    QString m_overwriteId;
+    QString m_overwriteType;
     QScopedPointer<QTemporaryFile> m_externalFile;
     bool m_saveBaseKnown = false;
     bool m_saveSubmitted = false;

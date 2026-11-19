@@ -22,7 +22,8 @@ CoverBackground {
     OpenCachedPdf { id: externalPdf }
 
     Component.onCompleted: {
-        lastOpenedProjectId = draftStore.loadLastProject(overleafClient.server)
+        if (overleafClient.userId === undefined || overleafClient.userId.length)
+            lastOpenedProjectId = draftStore.loadLastProject(overleafClient.server)
         if (editorPage)
             lastOpenedProjectId = editorPage.projectId
     }
@@ -33,7 +34,16 @@ CoverBackground {
     Connections {
         target: overleafClient
         ignoreUnknownSignals: true
-        onServerChanged: cover.lastOpenedProjectId = draftStore.loadLastProject(overleafClient.server)
+        onServerChanged: {
+            if (overleafClient.userId === undefined || overleafClient.userId.length)
+                cover.lastOpenedProjectId = draftStore.loadLastProject(overleafClient.server)
+            else
+                cover.lastOpenedProjectId = ""
+        }
+        onAccountChanged: {
+            if (overleafClient.userId.length)
+                cover.lastOpenedProjectId = draftStore.loadLastProject(overleafClient.server)
+        }
     }
     onStatusChanged: {
         if (status === Cover.Active)
@@ -228,7 +238,7 @@ CoverBackground {
         }
     }
     CoverActionList {
-        enabled: !!cover.editorPage && cover.showProjectList
+        enabled: !!cover.editorPage && cover.showProjectList && !overleafClient.busy
         CoverAction {
             objectName: "coverShowEditor"
             iconSource: "image://theme/icon-cover-next"

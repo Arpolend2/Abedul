@@ -12,7 +12,39 @@ private slots:
     void rejectsDamagedDraft();
     void reportsSaveFailure();
     void persistsFileBaseAndCompileRoot();
+    void separatesAccounts();
 };
+
+void DraftStoreTests::separatesAccounts()
+{
+    QTemporaryDir directory;
+    DraftStore store(directory.path());
+    const QString server = QStringLiteral("https://example.org");
+    QVERIFY(store.save(server, QStringLiteral("project"), QStringLiteral("legacy")));
+    store.setAccount(server, QStringLiteral("alice"));
+    QVERIFY(store.load(server, QStringLiteral("project")));
+    QVERIFY(!store.exists());
+    QVERIFY(store.save(server, QStringLiteral("project"), QStringLiteral("alice draft")));
+    store.setAccount(server, QStringLiteral("bob"));
+    QVERIFY(store.load(server, QStringLiteral("project")));
+    QVERIFY(!store.exists());
+    QVERIFY(store.save(server, QStringLiteral("project"), QStringLiteral("bob draft")));
+    store.setAccount(server, QStringLiteral("alice"));
+    QVERIFY(store.load(server, QStringLiteral("project")));
+    QCOMPARE(store.text(), QStringLiteral("alice draft"));
+    QVERIFY(!store.load(QStringLiteral("https://other.example"), QStringLiteral("project")));
+    QVERIFY(!store.error().isEmpty());
+    store.setAccount(server, QStringLiteral("bob"));
+    QVERIFY(store.error().isEmpty());
+    QVERIFY(store.text().isEmpty());
+    QVERIFY(!store.exists());
+    QVERIFY(!store.baseKnown());
+    store.setAccount(QString(), QString());
+    QVERIFY(!store.save(server, QStringLiteral("project"), QStringLiteral("unsafe")));
+    DraftStore legacy(directory.path());
+    QVERIFY(legacy.load(server, QStringLiteral("project")));
+    QCOMPARE(legacy.text(), QStringLiteral("legacy"));
+}
 
 void DraftStoreTests::persistsFileBaseAndCompileRoot()
 {
@@ -38,6 +70,8 @@ void DraftStoreTests::persistsFileBaseAndCompileRoot()
     QVERIFY(store.loadLastFile(QStringLiteral("https://other.example"), project).isEmpty());
     QVERIFY(restored.saveLastProject(server, project));
     QCOMPARE(store.loadLastProject(server), project);
+    QVERIFY(store.saveLastProject(server, QString()));
+    QVERIFY(restored.loadLastProject(server).isEmpty());
     QVERIFY(store.loadLastProject(QStringLiteral("https://other.example")).isEmpty());
     QVERIFY(store.saveFileWithBase(server, project, path, QStringLiteral("old draft"), QString(), false));
     QVERIFY(restored.loadFile(server, project, path));

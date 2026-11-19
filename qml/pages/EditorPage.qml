@@ -8,8 +8,13 @@ Page {
     allowedOrientations: Orientation.All
     property string projectId
     property string projectName
+    readonly property bool offline: overleafClient.offline === true
     property string compileRoot: ""
     property string currentFile: ""
+    property bool largeScreen: Screen.sizeCategory >= Screen.Large
+    property var attachedPdfPage: null
+    property bool hasStandaloneDraft: false
+    property bool showingCachedFile: false
     property bool initialized: false
     property bool dirty: false
     property string baseText: ""
@@ -20,13 +25,15 @@ Page {
     property bool started: false
     property bool lastFileRestored: false
     property bool compileHintShown: false
+    property bool searchVisible: false
+    property string searchMessage: ""
     property string zoomTarget: "editor"
     property string coverSnippet: ""
     property string coverSnippetFile: ""
     property bool coverHasEdits: false
     readonly property var latexSuggestion: {
         var input = editor._editor
-        if (!page.initialized || !editor.enabled || input.inputMethodComposing
+        if (page.offline || !page.initialized || !editor.enabled || input.inputMethodComposing
                 || input.selectionStart !== input.selectionEnd
                 || (currentFile.length && !/\.(tex|sty|cls|bib)$/i.test(currentFile)))
             return null
@@ -182,8 +189,83 @@ Page {
         bibMode: /\.bib$/i.test(page.currentFile)
     }
     backNavigation: !dirty && !overleafClient.sourceBusy
+    forwardNavigation: !panes.sideBySide && !!attachedPdfPage && !overleafClient.sourceBusy
+
+    function updatePdfNavigation() {
+        if (typeof pageStack === "undefined")
+            return
+        if (pageStack.busy) {
+            pdfNavigationTimer.restart()
+            return
+        }
+        if (attachedPdfPage && pageStack.currentPage === attachedPdfPage && page.largeScreen
+                && attachedPdfPage.width > attachedPdfPage.height) {
+            pageStack.navigateBack(PageStackAction.Immediate)
+            pdfNavigationTimer.restart()
+            return
+        }
+        if (page.status !== PageStatus.Active || pageStack.currentPage !== page)
+            return
+        if (panes.sideBySide && attachedPdfPage) {
+            var oldPage = attachedPdfPage
+            attachedPdfPage = null
+            pageStack.popAttached(oldPage, PageStackAction.Immediate)
+        } else if (!panes.sideBySide && !attachedPdfPage) {
+            attachedPdfPage = pageStack.pushAttached(pdfPageComponent)
+        }
+    }
+
+    Timer {
+        id: pdfNavigationTimer
+        interval: 100
+        onTriggered: page.updatePdfNavigation()
+    }
+
+    Component {
+        id: pdfPageComponent
+        Page {
+            id: separatePdfPage
+            objectName: "separatePdfPage"
+            allowedOrientations: Orientation.All
+            property alias contentHost: pdfPageHost
+            onStatusChanged: if (status === PageStatus.Active) pdfNavigationTimer.restart()
+            onWidthChanged: if (status === PageStatus.Active) pdfNavigationTimer.restart()
+            onHeightChanged: if (status === PageStatus.Active) pdfNavigationTimer.restart()
+            Component.onDestruction: if (page.attachedPdfPage === separatePdfPage) page.attachedPdfPage = null
+            Shortcut {
+                sequence: StandardKey.Save
+                enabled: separatePdfPage.status === PageStatus.Active
+                autoRepeat: false
+                onActivated: page.saveAndCompile()
+            }
+            SilicaFlickable {
+                id: pdfPageFlick
+                anchors.fill: parent
+                contentHeight: height
+                PullDownMenu {
+                    MenuItem {
+                        text: qsTr("Open PDF in another app")
+                        enabled: overleafClient.pdfPath.length > 0 && !overleafClient.pdfBusy
+                        onClicked: externalPdf.open()
+                    }
+                    MenuItem {
+                        text: qsTr("Save and compile")
+                        enabled: !page.offline && !overleafClient.sourceBusy && !overleafClient.pdfBusy
+                        onClicked: page.saveAndCompile()
+                    }
+                }
+                Item {
+                    id: pdfPageHost
+                    width: parent.width
+                    height: parent.height
+                }
+            }
+        }
+    }
 
     function saveDraft() {
+        if (offline)
+            return
         if (dirty) {
             var saved = currentFile.length
                 ? draftStore.saveFileWithBase(overleafClient.server, projectId, currentFile,
@@ -192,6 +274,70 @@ Page {
             if (saved)
                 dirty = false
         }
+    }
+
+    function findText(backwards) {
+        var needle = searchInput.text
+        if (!needle.length)
+            return false
+        var input = editor._editor
+        var haystack = input.text
+        var start = backwards ? input.selectionStart - 1 : input.selectionEnd
+        var index = backwards ? (start < 0 ? -1 : haystack.lastIndexOf(needle, start))
+                              : haystack.indexOf(needle, start)
+        if (index < 0)
+            index = backwards ? haystack.lastIndexOf(needle) : haystack.indexOf(needle)
+        if (index < 0) {
+            searchMessage = qsTr("No matches found.")
+            return false
+        }
+        searchMessage = ""
+        input.select(index, index + needle.length)
+        var rect = input.positionToRectangle(index)
+        var point = input.mapToItem(codePane.contentItem, rect.x, rect.y)
+        codePane.contentY = Math.max(0, Math.min(codePane.contentHeight - codePane.height,
+                                                point.y - (codePane.height + searchPanel.height) / 2))
+        return true
+    }
+
+    function replaceMatch() {
+        if (offline)
+            return false
+        var input = editor._editor
+        var needle = searchInput.text
+        if (!needle.length || !replaceInput.text.length || !editor.enabled || input.inputMethodComposing)
+            return
+        if (input.text.substring(input.selectionStart, input.selectionEnd) !== needle && !findText(false))
+            return
+        var start = input.selectionStart
+        if (!completionKeys.replace(start, input.selectionEnd, replaceInput.text)) {
+            searchMessage = qsTr("Could not replace the match.")
+            return
+        }
+        input.cursorPosition = start + replaceInput.text.length
+        findText(false)
+    }
+
+    function replaceAllMatches() {
+        if (offline)
+            return false
+        var input = editor._editor
+        var needle = searchInput.text
+        if (!needle.length || !replaceInput.text.length || !editor.enabled || input.inputMethodComposing)
+            return
+        var parts = input.text.split(needle)
+        if (parts.length === 1) {
+            searchMessage = qsTr("No matches found.")
+            return
+        }
+        var position = input.cursorPosition
+        var replacement = parts.join(replaceInput.text)
+        if (!completionKeys.replace(0, input.length, replacement)) {
+            searchMessage = qsTr("Could not replace the match.")
+            return
+        }
+        input.cursorPosition = Math.min(position, input.length)
+        searchMessage = qsTr("Replaced %1 matches.").arg(parts.length - 1)
     }
 
     function updateCoverSnippet() {
@@ -235,10 +381,14 @@ Page {
         if (started && typeof overleafClient.setCoverEditor === "function") {
             overleafClient.setCoverEditor(page)
             overleafClient.coverShowsProjects = false
+            if (typeof overleafClient.probeProjectComments === "function")
+                overleafClient.probeProjectComments(projectId)
         }
     }
 
     function saveAndCompile() {
+        if (offline)
+            return
         if (overleafClient.sourceBusy || overleafClient.pdfBusy)
             return
         actionError = ""
@@ -257,6 +407,69 @@ Page {
         overleafClient.saveProjectSource(projectId, currentFile, baseText, baseKnown, editor.text)
     }
 
+    function saveBeforeFileOperation() {
+        if (!currentFile.length || overleafClient.sourceBusy)
+            return false
+        saveDraft()
+        if (dirty)
+            return false
+        overleafClient.saveProjectSource(projectId, currentFile, baseText, baseKnown, editor.text)
+        return true
+    }
+
+    function finishFileOperationSave(path, text) {
+        if (path !== currentFile || editor.text !== text) {
+            saveDraft()
+            return false
+        }
+        baseText = text
+        baseKnown = true
+        if (!draftStore.saveFileWithBase(overleafClient.server, projectId, path, text, text, true)) {
+            dirty = true
+            return false
+        }
+        dirty = false
+        return true
+    }
+
+    function fileOperationFinished(action, path, type, newPath) {
+        if (action !== "rename" && action !== "delete")
+            return
+        var includes = function(value) {
+            return value === path || (type === "folder" && value.indexOf(path + "/") === 0)
+        }
+        var mapped = function(value) {
+            return action === "rename" ? newPath + value.substring(path.length) : ""
+        }
+        var error = ""
+        if (currentFile.length && includes(currentFile)) {
+            currentFile = mapped(currentFile)
+            if (currentFile.length) {
+                if (!draftStore.saveFileWithBase(overleafClient.server, projectId, currentFile,
+                                                 editor.text, baseText, baseKnown))
+                    error = draftStore.error
+            } else {
+                initialized = false
+                editor.text = ""
+                showingCachedFile = false
+                baseText = ""
+                baseKnown = false
+                dirty = false
+                initialized = true
+            }
+            if (!draftStore.saveLastFile(overleafClient.server, projectId, currentFile) && !error.length)
+                error = draftStore.error
+            updateCoverSnippet()
+        }
+        if (compileRoot.length && includes(compileRoot)) {
+            compileRoot = mapped(compileRoot)
+            if (!draftStore.saveCompileRoot(overleafClient.server, projectId, compileRoot) && !error.length)
+                error = draftStore.error
+        }
+        if (error.length)
+            actionError = error
+    }
+
     function adjustZoom(direction) {
         if (zoomTarget === "pdf") {
             if (pdfLoader.item)
@@ -269,14 +482,35 @@ Page {
     }
 
     function openProjectFile(path) {
+        if (offline) {
+            overleafClient.openProjectSource(projectId, path)
+            return true
+        }
         saveDraft()
         if (dirty || overleafClient.sourceBusy)
             return false
+        if (!draftStore.loadFile(overleafClient.server, projectId, path)) {
+            actionError = draftStore.error
+            return false
+        }
+        if (draftStore.exists) {
+            initialized = false
+            currentFile = path
+            editor.text = draftStore.text
+            baseText = draftStore.baseText
+            baseKnown = draftStore.baseKnown
+            initialized = true
+            showingCachedFile = true
+        }
         overleafClient.openProjectSource(projectId, path)
         return true
     }
 
     function syncAllowed() {
+        if (offline) {
+            actionError = qsTr("SyncTeX is not available offline.")
+            return false
+        }
         if (!overleafClient.pdfPath.length || overleafClient.pdfBusy || overleafClient.sourceBusy) {
             actionError = qsTr("Compile the project and wait for the file to open before using SyncTeX.")
             return false
@@ -321,6 +555,8 @@ Page {
         var column = position.column >= 0 ? position.column : 0
         editor._editor.cursorPosition = offset + Math.min(column, lines[position.line - 1].length)
         editor._editor.forceActiveFocus()
+        if (attachedPdfPage && pageStack.currentPage === attachedPdfPage)
+            pageStack.navigateBack()
         var rect = editor._editor.positionToRectangle(editor._editor.cursorPosition)
         var mapped = editor._editor.mapToItem(codePane.contentItem, rect.x, rect.y)
         codePane.contentY = Math.max(0, Math.min(codePane.contentHeight - codePane.height,
@@ -332,19 +568,37 @@ Page {
             return
         lastFileRestored = true
         var lastFile = draftStore.loadLastFile(overleafClient.server, projectId)
+        if (draftStore.error.length) {
+            actionError = draftStore.error
+            return
+        }
         if (lastFile.length)
-            overleafClient.openProjectSource(projectId, lastFile)
+            openProjectFile(lastFile)
+        else if (!hasStandaloneDraft) {
+            if (compileRoot.length)
+                openProjectFile(compileRoot)
+            else
+                overleafClient.openMainProjectSource(projectId)
+        }
     }
 
     function initializeEditor() {
         if (started)
             return
         started = true
+        if (typeof overleafClient.restoreProjectPdf === "function")
+            overleafClient.restoreProjectPdf(projectId)
+        if (offline) {
+            initialized = true
+            overleafClient.openMainProjectSource(projectId)
+            return
+        }
         compileRoot = draftStore.loadCompileRoot(overleafClient.server, projectId)
         if (draftStore.error.length)
             return
         if (draftStore.load(overleafClient.server, projectId)) {
             editor.text = draftStore.text
+            hasStandaloneDraft = draftStore.exists
             initialized = true
         } else {
             return
@@ -362,6 +616,7 @@ Page {
             if (deferOpen)
                 initializeEditor()
             activateCover()
+            pdfNavigationTimer.restart()
         }
     }
     Component.onDestruction: {
@@ -394,6 +649,15 @@ Page {
     }
     Connections {
         target: overleafClient
+        ignoreUnknownSignals: true
+        onReconnected: {
+            if (!page.started)
+                return
+            if (page.currentFile.length)
+                overleafClient.openProjectSource(page.projectId, page.currentFile)
+            else
+                overleafClient.openMainProjectSource(page.projectId)
+        }
         onSourceErrorChanged: {
             if (overleafClient.sourceError.length && !overleafClient.sourceBusy) {
                 page.pendingCompileRoot = ""
@@ -420,6 +684,16 @@ Page {
         onSourceTextChanged: {
             if (!page.started || !overleafClient.sourcePath.length)
                 return
+            if (page.offline) {
+                page.initialized = false
+                page.currentFile = overleafClient.sourcePath
+                editor.text = overleafClient.sourceText
+                page.baseText = editor.text
+                page.baseKnown = true
+                page.showingCachedFile = true
+                page.initialized = true
+                return
+            }
             if (coverSnippetTimer.running) {
                 coverSnippetTimer.stop()
                 page.updateCoverSnippet()
@@ -428,6 +702,7 @@ Page {
                 return
             page.initialized = false
             page.currentFile = overleafClient.sourcePath
+            page.showingCachedFile = false
             var useDraft = draftStore.exists
                            && (!draftStore.baseKnown || draftStore.text !== draftStore.baseText)
             editor.text = useDraft ? draftStore.text : overleafClient.sourceText
@@ -438,6 +713,9 @@ Page {
                 page.baseText = overleafClient.sourceText
             }
             page.actionError = ""
+            if (!useDraft && !draftStore.saveFileWithBase(overleafClient.server, page.projectId,
+                    page.currentFile, editor.text, editor.text, true))
+                page.actionError = draftStore.error
             if (/\.tex$/i.test(page.currentFile) && !page.pendingSyncSource) {
                 page.compileRoot = page.currentFile
                 if (!draftStore.saveCompileRoot(overleafClient.server, page.projectId, page.compileRoot))
@@ -476,8 +754,11 @@ Page {
                 page.actionError = qsTr("The source changed while SyncTeX was running.")
                 return
             }
-            if (pdfLoader.item && positions.length)
+            if (pdfLoader.item && positions.length) {
                 pdfLoader.item.showSyncPosition(positions[0])
+                if (!panes.sideBySide && page.attachedPdfPage && page.status === PageStatus.Active)
+                    pageStack.navigateForward()
+            }
         }
         onSyncSourcePositions: {
             if (page.syncRequestFile !== page.currentFile || page.syncRequestText !== editor.text) {
@@ -533,6 +814,53 @@ Page {
         enabled: page.status === PageStatus.Active
         autoRepeat: false
         onActivated: page.saveAndCompile()
+    }
+    Shortcut {
+        objectName: "editorSearchShortcut"
+        sequence: "Ctrl+F"
+        enabled: page.status === PageStatus.Active
+        onActivated: {
+            page.searchVisible = true
+            searchInput.forceActiveFocus()
+        }
+    }
+    Shortcut {
+        objectName: "searchCloseShortcut"
+        sequence: "Escape"
+        enabled: page.status === PageStatus.Active && page.searchVisible
+                 && !searchInput.inputMethodComposing && !replaceInput.inputMethodComposing
+                 && !editor.inputMethodComposing
+        autoRepeat: false
+        onActivated: page.searchVisible = false
+    }
+    Shortcut {
+        objectName: "searchPreviousShortcut"
+        sequence: "Up"
+        enabled: page.status === PageStatus.Active && page.searchVisible && editor.enabled
+                 && searchInput.text.length > 0
+                 && (searchInput._editor.activeFocus || replaceInput._editor.activeFocus)
+                 && !searchInput.inputMethodComposing && !replaceInput.inputMethodComposing
+        onActivated: page.findText(true)
+    }
+    Shortcut {
+        objectName: "searchNextShortcut"
+        sequence: "Down"
+        enabled: page.status === PageStatus.Active && page.searchVisible && editor.enabled
+                 && searchInput.text.length > 0
+                 && (searchInput._editor.activeFocus || replaceInput._editor.activeFocus)
+                 && !searchInput.inputMethodComposing && !replaceInput.inputMethodComposing
+        onActivated: page.findText(false)
+    }
+    Shortcut {
+        objectName: "searchReplaceShortcut"
+        sequence: "Tab"
+        enabled: page.status === PageStatus.Active && page.searchVisible && !page.offline && editor.enabled
+                 && searchInput.text.length > 0 && replaceInput.text.length > 0
+                 && (searchInput._editor.activeFocus || replaceInput._editor.activeFocus)
+                 && !searchInput.inputMethodComposing && !replaceInput.inputMethodComposing
+                 && !editor.inputMethodComposing
+        autoRepeat: false
+        onActivated: page.replaceMatch()
     }
     Shortcut {
         sequence: StandardKey.ZoomIn
@@ -622,6 +950,46 @@ Page {
                 onClicked: pageStack.push(Qt.resolvedUrl("SettingsPage.qml"))
             }
             MenuItem {
+                objectName: "projectSharing"
+                visible: !page.offline
+                text: qsTr("Sharing")
+                onClicked: pageStack.push(Qt.resolvedUrl("ProjectCollaborationPage.qml"), {
+                    "projectId": page.projectId, "mode": "share"
+                })
+            }
+            MenuItem {
+                objectName: "projectHistory"
+                visible: !page.offline
+                text: qsTr("History")
+                onClicked: pageStack.push(Qt.resolvedUrl("ProjectCollaborationPage.qml"), {
+                    "projectId": page.projectId, "mode": "history"
+                })
+            }
+            MenuItem {
+                objectName: "projectComments"
+                visible: overleafClient.commentsAvailable
+                text: qsTr("Comments")
+                onClicked: pageStack.push(Qt.resolvedUrl("ProjectCollaborationPage.qml"), {
+                    "projectId": page.projectId, "mode": "comments"
+                })
+            }
+            MenuItem {
+                objectName: "projectChat"
+                visible: !page.offline
+                text: qsTr("Chat")
+                onClicked: pageStack.push(Qt.resolvedUrl("ProjectCollaborationPage.qml"), {
+                    "projectId": page.projectId, "mode": "chat"
+                })
+            }
+            MenuItem {
+                objectName: "editorSearch"
+                text: qsTr("Find and replace")
+                onClicked: {
+                    page.searchVisible = true
+                    searchInput.forceActiveFocus()
+                }
+            }
+            MenuItem {
                 objectName: "openCachedPdf"
                 text: qsTr("Open PDF in another app")
                 enabled: overleafClient.pdfPath.length > 0 && !overleafClient.pdfBusy
@@ -630,7 +998,7 @@ Page {
             MenuItem {
                 objectName: "downloadProjectArchive"
                 text: qsTr("Download saved project ZIP")
-                enabled: !overleafClient.archiveBusy
+                enabled: !page.offline && !overleafClient.archiveBusy
                 onClicked: overleafClient.downloadProjectArchive(page.projectId)
             }
             MenuItem {
@@ -645,7 +1013,7 @@ Page {
             MenuItem {
                 objectName: "saveAndCompile"
                 text: qsTr("Save and compile")
-                enabled: !overleafClient.sourceBusy && !overleafClient.pdfBusy
+                enabled: !page.offline && !overleafClient.sourceBusy && !overleafClient.pdfBusy
                 onClicked: page.saveAndCompile()
             }
         }
@@ -663,20 +1031,30 @@ Page {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.bottom: parent.bottom
-            property bool sideBySide: width > height
+            property bool sideBySide: page.largeScreen && width > height
+            onSideBySideChanged: pdfNavigationTimer.restart()
 
             SilicaFlickable {
                 id: codePane
                 objectName: "editorCodePane"
                 x: panes.sideBySide && overleafClient.pdfOnLeft ? panes.width / 2 : 0
                 width: panes.sideBySide ? panes.width / 2 : panes.width
-                height: panes.sideBySide ? panes.height : panes.height / 2
+                height: panes.height
                 contentHeight: codeColumn.height
                 clip: true
                 Column {
                     id: codeColumn
                     width: parent.width
                     opacity: page.openingSource ? 0.3 : 1
+                    Label {
+                        x: Theme.horizontalPageMargin
+                        width: parent.width - 2 * x
+                        wrapMode: Text.Wrap
+                        color: Theme.secondaryColor
+                        visible: page.showingCachedFile
+                        text: overleafClient.sourceBusy ? qsTr("Showing a local copy while updating…")
+                                                       : qsTr("Showing a local copy; it may be out of date.")
+                    }
                     Label {
                         objectName: "sourceStatus"
                         x: Theme.horizontalPageMargin
@@ -686,16 +1064,19 @@ Page {
                         text: qsTr("Local changes to %1 are not saved to Overleaf.").arg(page.currentFile)
                     }
                     Label {
+                        objectName: "editorError"
                         x: Theme.horizontalPageMargin
                         width: parent.width - 2 * x
                         wrapMode: Text.Wrap
                         color: Theme.errorColor
                         visible: draftStore.error.length > 0 || overleafClient.sourceError.length > 0
+                                 || (page.offline && overleafClient.error && overleafClient.error.length > 0)
                                  || page.actionError.length > 0 || externalPdf.error.length > 0
                                  || (overleafClient.archiveProject === page.projectId
                                      && overleafClient.archiveError.length > 0)
                         text: draftStore.error.length ? draftStore.error
                               : overleafClient.sourceError.length ? overleafClient.sourceError
+                              : page.offline && overleafClient.error && overleafClient.error.length ? overleafClient.error
                               : page.actionError.length ? page.actionError
                               : externalPdf.error.length ? externalPdf.error
                               : overleafClient.archiveProject === page.projectId ? overleafClient.archiveError : ""
@@ -727,6 +1108,8 @@ Page {
                         font.family: "monospace"
                         font.pixelSize: Math.round(Theme.fontSizeMedium * overleafClient.editorFontScale / 100)
                         color: Theme.colorScheme === Theme.LightOnDark ? "#dedede" : "#262626"
+                        Binding { target: editor._editor; property: "persistentSelection"; value: true }
+                        Binding { target: editor._editor; property: "readOnly"; value: page.offline }
                         onTextChanged: {
                             if (page.initialized) {
                                 page.dirty = true
@@ -864,13 +1247,139 @@ Page {
                 }
             }
 
+            Rectangle {
+                id: searchPanel
+                objectName: "editorSearchPanel"
+                x: codePane.x
+                width: codePane.width
+                height: visible ? Math.min(searchContents.height, codePane.height * 0.7) : 0
+                color: page.editorBackground
+                border.color: Theme.secondaryColor
+                visible: page.searchVisible
+                z: 4
+                SilicaFlickable {
+                    anchors.fill: parent
+                    contentHeight: searchContents.height
+                    clip: true
+                    Column {
+                        id: searchContents
+                        width: parent.width
+                        TextField {
+                            id: searchInput
+                            objectName: "searchInput"
+                            width: parent.width
+                            label: qsTr("Find")
+                            placeholderText: qsTr("Find")
+                            onTextChanged: page.searchMessage = ""
+                            EnterKey.onClicked: page.findText(false)
+                        }
+                        TextField {
+                            id: replaceInput
+                            objectName: "replaceInput"
+                            width: parent.width
+                            label: qsTr("Replace with")
+                            placeholderText: qsTr("Replace with")
+                        }
+                        Label {
+                            x: Theme.horizontalPageMargin
+                            width: parent.width - 2 * x
+                            wrapMode: Text.Wrap
+                            color: Theme.secondaryColor
+                            text: page.searchMessage.length ? page.searchMessage
+                                  : qsTr("Search is case-sensitive and applies to the current file.")
+                        }
+                        SilicaFlickable {
+                            id: searchActions
+                            objectName: "searchActions"
+                            width: parent.width
+                            height: Theme.itemSizeSmall
+                            contentWidth: searchActionsRow.width
+                            contentHeight: height
+                            flickableDirection: Flickable.HorizontalFlick
+                            clip: true
+                            Row {
+                                id: searchActionsRow
+                                objectName: "searchActionsRow"
+                                spacing: Theme.paddingSmall
+                                readonly property real minimumWidth: searchPrevious.width + searchNext.width
+                                                                     + replaceButton.implicitWidth
+                                                                     + replaceAllButton.implicitWidth
+                                                                     + searchClose.width
+                                                                     + 4 * spacing
+                                width: Math.max(searchActions.width, minimumWidth)
+                                height: searchActions.height
+                                Button {
+                                    id: searchPrevious
+                                    objectName: "searchPrevious"
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    preferredWidth: Theme.buttonWidthTiny
+                                    width: implicitHeight
+                                    icon.source: "image://theme/icon-m-up-alt"
+                                    Accessible.name: qsTr("Previous")
+                                    Accessible.role: Accessible.Button
+                                    enabled: editor.enabled && searchInput.text.length > 0
+                                    onClicked: page.findText(true)
+                                }
+                                Button {
+                                    id: searchNext
+                                    objectName: "searchNext"
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    preferredWidth: Theme.buttonWidthTiny
+                                    width: implicitHeight
+                                    icon.source: "image://theme/icon-m-down-alt"
+                                    Accessible.name: qsTr("Next")
+                                    Accessible.role: Accessible.Button
+                                    enabled: editor.enabled && searchInput.text.length > 0
+                                    onClicked: page.findText(false)
+                                }
+                                Button {
+                                    id: replaceButton
+                                    objectName: "searchReplace"
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    preferredWidth: Theme.buttonWidthExtraSmall
+                                    width: implicitWidth + (searchActionsRow.width - searchActionsRow.minimumWidth) / 2
+                                    text: qsTr("Replace")
+                                    enabled: !page.offline && editor.enabled && searchInput.text.length > 0 && replaceInput.text.length > 0
+                                    onClicked: page.replaceMatch()
+                                }
+                                Button {
+                                    id: replaceAllButton
+                                    objectName: "searchReplaceAll"
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    preferredWidth: Theme.buttonWidthExtraSmall
+                                    width: implicitWidth + (searchActionsRow.width - searchActionsRow.minimumWidth) / 2
+                                    text: qsTr("Replace all")
+                                    enabled: !page.offline && editor.enabled && searchInput.text.length > 0 && replaceInput.text.length > 0
+                                    onClicked: page.replaceAllMatches()
+                                }
+                                Button {
+                                    id: searchClose
+                                    objectName: "searchClose"
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    preferredWidth: Theme.buttonWidthTiny
+                                    width: implicitHeight
+                                    icon.source: "image://theme/icon-m-cancel"
+                                    Accessible.name: qsTr("Close")
+                                    Accessible.role: Accessible.Button
+                                    onClicked: page.searchVisible = false
+                                }
+                            }
+                            HorizontalScrollDecorator {}
+                        }
+                    }
+                    VerticalScrollDecorator {}
+                }
+            }
+
             Item {
                 id: pdfPane
                 objectName: "editorPdfPane"
+                parent: !panes.sideBySide && page.attachedPdfPage ? page.attachedPdfPage.contentHost : panes
+                visible: panes.sideBySide || !!page.attachedPdfPage
                 x: panes.sideBySide && !overleafClient.pdfOnLeft ? codePane.width : 0
-                y: panes.sideBySide ? 0 : codePane.height
-                width: panes.sideBySide ? panes.width - codePane.width : panes.width
-                height: panes.sideBySide ? panes.height : panes.height - codePane.height
+                y: 0
+                width: panes.sideBySide ? panes.width - codePane.width : parent.width
+                height: parent.height
                 Column {
                     id: pdfHeader
                     width: parent.width
@@ -952,7 +1461,7 @@ Page {
                     objectName: "pdfCompileButton"
                     anchors.centerIn: parent
                     text: qsTr("Save and compile")
-                    enabled: !overleafClient.sourceBusy && !overleafClient.pdfBusy
+                    enabled: !page.offline && !overleafClient.sourceBusy && !overleafClient.pdfBusy
                     visible: overleafClient.pdfPath.length === 0 && !page.compileInProgress
                     onClicked: page.saveAndCompile()
                 }

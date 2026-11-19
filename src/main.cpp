@@ -22,6 +22,7 @@ int main(int argc, char **argv)
     application->setOrganizationName(QStringLiteral("ru.auroraos"));
     application->setApplicationName(QStringLiteral("OverleafClient"));
     application->setApplicationDisplayName(QStringLiteral("Abedul"));
+    application->setApplicationVersion(QStringLiteral(ABEDUL_VERSION));
     QTranslator translator;
     const QLocale locale = QLocale::system();
     if (locale.language() == QLocale::Russian) {
@@ -38,11 +39,16 @@ int main(int argc, char **argv)
 
     OverleafClient client;
     DraftStore drafts;
+    drafts.setAccount(QString(), QString());
+    QObject::connect(&client, &OverleafClient::accountChanged, &drafts, [&]() {
+        drafts.setAccount(client.server(), client.userId());
+    });
     QScopedPointer<QQuickView> view(Aurora::Application::createView());
     view->engine()->addImportPath(Aurora::Application::pathTo(QString()).toLocalFile());
     Aurora::WebView::WebEngineContext::InitBrowser(argc, argv, {"--default-encoding=UTF-8"});
     view->rootContext()->setContextProperty(QStringLiteral("overleafClient"), &client);
     view->rootContext()->setContextProperty(QStringLiteral("draftStore"), &drafts);
+    view->rootContext()->setContextProperty(QStringLiteral("appVersion"), application->applicationVersion());
     view->setSource(Aurora::Application::pathTo(QStringLiteral("qml/OverleafClient.qml")));
     view->show();
     return application->exec();

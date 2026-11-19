@@ -6,9 +6,12 @@ Page {
     objectName: "projectsPage"
     allowedOrientations: Orientation.All
     backNavigation: false
+    canNavigateForward: (!overleafClient.busy || overleafClient.projectsCached) && !pendingDetachedProject.length
     property bool showArchived: false
+    property bool showTrash: false
     property string lastProjectId: ""
     property string navigationError: ""
+    property string pendingDetachedProject: ""
 
     function rememberProject(project) {
         lastProjectId = project.id
@@ -35,6 +38,56 @@ Page {
         }
     }
 
+    function openCreateProjectDialog() {
+        pageStack.push(createProjectDialog)
+    }
+
+    function openProjectActionDialog(project, action) {
+        var editor = overleafClient.coverEditor
+        if (action === "trash" && editor && editor.projectId === project.id && editor.dirty) {
+            editor.saveDraft()
+            if (editor.dirty) {
+                navigationError = draftStore.error
+                return
+            }
+        }
+        pageStack.push(projectActionDialog, { "project": project, "action": action })
+    }
+
+    Connections {
+        target: overleafClient
+        ignoreUnknownSignals: true
+        onProjectsChanged: if (page.status === PageStatus.Active) attachTimer.restart()
+        onProjectTrashChanged: {
+            if (action !== "trash" && action !== "delete")
+                return
+            if (page.lastProjectId === projectId) {
+                page.lastProjectId = ""
+                if (!draftStore.saveLastProject(overleafClient.server, ""))
+                    page.navigationError = draftStore.error
+            }
+            if (overleafClient.coverEditor && overleafClient.coverEditor.projectId === projectId)
+                overleafClient.setCoverEditor(null)
+            page.pendingDetachedProject = projectId
+            detachTimer.restart()
+        }
+    }
+    Timer {
+        id: detachTimer
+        interval: 100
+        onTriggered: {
+            if (!page.pendingDetachedProject.length)
+                return
+            if (page.status !== PageStatus.Active || pageStack.busy || pageStack.currentPage !== page) {
+                restart()
+                return
+            }
+            var attached = pageStack.nextPage(page)
+            if (attached && attached.projectId === page.pendingDetachedProject)
+                pageStack.popAttached(attached, PageStackAction.Immediate)
+            page.pendingDetachedProject = ""
+        }
+    }
     Component.onCompleted: {
         lastProjectId = draftStore.loadLastProject(overleafClient.server)
         if (draftStore.error.length)
@@ -61,26 +114,66 @@ Page {
         anchors.fill: parent
         header: Column {
             width: parent.width
-            PageHeader { title: page.showArchived ? qsTr("Archived projects") : qsTr("Projects") }
+            PageHeader { title: page.showTrash ? qsTr("Trash") : page.showArchived ? qsTr("Archived projects") : qsTr("Projects") }
             Label {
+                objectName: "projectCreationError"
                 x: Theme.horizontalPageMargin
                 width: parent.width - 2 * x
                 wrapMode: Text.Wrap
                 color: Theme.errorColor
                 visible: text.length > 0
-                text: page.navigationError.length ? page.navigationError : overleafClient.error
+                text: page.navigationError.length ? page.navigationError
+                      : overleafClient.projectActionError.length ? overleafClient.projectActionError
+                      : overleafClient.projectCreationError.length ? overleafClient.projectCreationError
+                      : overleafClient.error
+            }
+            Label {
+                objectName: "projectCreationBusy"
+                x: Theme.horizontalPageMargin
+                width: parent.width - 2 * x
+                wrapMode: Text.Wrap
+                color: Theme.secondaryColor
+                visible: overleafClient.projectCreationBusy
+                text: qsTr("Creating project…")
+            }
+            Label {
+                x: Theme.horizontalPageMargin
+                width: parent.width - 2 * x
+                wrapMode: Text.Wrap
+                color: Theme.secondaryColor
+                visible: overleafClient.projectsCached
+                text: overleafClient.offline === true && (overleafClient.busy || overleafClient.backgroundCookiePending)
+                      ? qsTr("Connecting in the background…")
+                      : overleafClient.offline === true ? qsTr("Offline: cached projects may be out of date.")
+                      : overleafClient.busy ? qsTr("Showing cached projects while updating…")
+                                          : qsTr("Showing cached projects. Refresh to update.")
             }
         }
         model: {
             var result = []
             var projects = overleafClient.projects
             for (var i = 0; i < projects.length; ++i) {
-                if (!projects[i].trashed && projects[i].archived === page.showArchived)
+                if (page.showTrash ? projects[i].trashed
+                                   : !projects[i].trashed && projects[i].archived === page.showArchived)
                     result.push(projects[i])
             }
             return result
         }
         PullDownMenu {
+            MenuItem {
+                objectName: "refreshProjects"
+                text: qsTr("Refresh")
+                enabled: !overleafClient.busy && !overleafClient.backgroundCookiePending
+                onClicked: overleafClient.refreshProjects()
+            }
+            MenuItem {
+                objectName: "createProject"
+                visible: !page.showArchived && !page.showTrash
+                enabled: overleafClient.authenticated && overleafClient.offline !== true && !overleafClient.busy
+                         && !overleafClient.projectCreationBusy
+                text: qsTr("New project")
+                onClicked: page.openCreateProjectDialog()
+            }
             MenuItem {
                 objectName: "projectSettings"
                 text: qsTr("Settings")
@@ -93,6 +186,15 @@ Page {
                 onClicked: pageStack.pop()
             }
             MenuItem {
+                objectName: "showTrash"
+                text: page.showTrash ? qsTr("Show projects") : qsTr("Trash")
+                onClicked: {
+                    page.showTrash = !page.showTrash
+                    page.showArchived = false
+                }
+            }
+            MenuItem {
+                visible: !page.showTrash
                 text: page.showArchived ? qsTr("Show projects") : qsTr("Show archived projects")
                 onClicked: page.showArchived = !page.showArchived
             }
@@ -100,7 +202,10 @@ Page {
         delegate: ListItem {
             width: ListView.view.width
             contentHeight: Theme.itemSizeMedium
+            enabled: !overleafClient.busy || overleafClient.projectsCached
             onClicked: {
+                if (page.showTrash)
+                    return
                 page.rememberProject(modelData)
                 page.attachLastProject()
                 pageStack.navigateForward()
@@ -113,21 +218,104 @@ Page {
                 color: modelData.id === page.lastProjectId ? Theme.highlightColor : Theme.primaryColor
                 text: modelData.name
             }
+            menu: ContextMenu {
+                MenuItem {
+                    visible: !page.showTrash && !overleafClient.projectsCached && !overleafClient.busy
+                    text: qsTr("Move to trash")
+                    onClicked: page.openProjectActionDialog(modelData, "trash")
+                }
+                MenuItem {
+                    visible: page.showTrash && !overleafClient.projectsCached && !overleafClient.busy
+                    text: qsTr("Restore")
+                    onClicked: overleafClient.changeProjectTrash(modelData.id, "restore")
+                }
+                MenuItem {
+                    visible: page.showTrash && !overleafClient.projectsCached && !overleafClient.busy && modelData.accessLevel === "owner"
+                    text: qsTr("Delete permanently")
+                    onClicked: page.openProjectActionDialog(modelData, "delete")
+                }
+            }
         }
         ViewPlaceholder {
             objectName: "projectsLoading"
-            enabled: overleafClient.busy
+            enabled: overleafClient.busy && !overleafClient.projectsCached
             text: qsTr("Loading projects…")
         }
         ViewPlaceholder {
             enabled: !overleafClient.busy && projectList.count === 0
             text: overleafClient.error.length ? ""
+                  : page.showTrash ? qsTr("Trash is empty")
                   : page.showArchived ? qsTr("No archived projects") : qsTr("No projects")
         }
         VerticalScrollDecorator {}
         WheelScroll {
             parent: projectList
             flickable: projectList
+        }
+    }
+
+    Component {
+        id: projectActionDialog
+        Dialog {
+            id: actionDialog
+            property var project
+            property string action
+            canAccept: !overleafClient.busy
+            onAccepted: overleafClient.changeProjectTrash(project.id, action)
+            SilicaFlickable {
+                anchors.fill: parent
+                contentHeight: actionContents.height
+                Column {
+                    id: actionContents
+                    width: parent.width
+                    DialogHeader {
+                        title: actionDialog.action === "trash" ? qsTr("Move to trash") : qsTr("Delete permanently")
+                        acceptText: actionDialog.action === "trash" ? qsTr("Move") : qsTr("Delete")
+                    }
+                    Label {
+                        x: Theme.horizontalPageMargin
+                        width: parent.width - 2 * x
+                        wrapMode: Text.Wrap
+                        textFormat: Text.PlainText
+                        text: actionDialog.action === "trash"
+                              ? qsTr("Move “%1” to the trash? You can restore it later.").arg(actionDialog.project.name)
+                              : qsTr("Permanently delete “%1”? This cannot be undone.").arg(actionDialog.project.name)
+                    }
+                }
+                VerticalScrollDecorator {}
+            }
+        }
+    }
+
+    Component {
+        id: createProjectDialog
+        Dialog {
+            id: dialog
+            objectName: "createProjectDialog"
+            canAccept: projectName.text.trim().length > 0 && !overleafClient.projectCreationBusy
+            onAccepted: overleafClient.createProject(projectName.text.trim())
+
+            SilicaFlickable {
+                anchors.fill: parent
+                contentHeight: createContents.height
+                Column {
+                    id: createContents
+                    width: parent.width
+                    DialogHeader {
+                        title: qsTr("New project")
+                    }
+                    TextField {
+                        id: projectName
+                        objectName: "projectNameInput"
+                        width: parent.width
+                        placeholderText: qsTr("Project name")
+                        text: qsTr("Untitled project")
+                        EnterKey.enabled: text.trim().length > 0
+                        EnterKey.onClicked: dialog.accept()
+                    }
+                }
+                VerticalScrollDecorator {}
+            }
         }
     }
 }

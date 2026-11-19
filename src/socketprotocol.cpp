@@ -4,8 +4,74 @@
 #include <QJsonValue>
 #include <QTextCodec>
 #include <QNetworkCookieJar>
+#include <QSet>
 
 namespace {
+bool validateFolder(const QJsonObject &folder, QSet<QString> *ids, int depth)
+{
+    const QString id = folder.value(QStringLiteral("_id")).toString();
+    if (depth > 100 || id.isEmpty() || ids->contains(id))
+        return false;
+    ids->insert(id);
+    QSet<QString> names;
+    for (const QString &kind : {QStringLiteral("docs"), QStringLiteral("fileRefs"),
+                                QStringLiteral("folders")}) {
+        const QJsonValue children = folder.value(kind);
+        if (!children.isArray())
+            return false;
+        for (const QJsonValue &value : children.toArray()) {
+            if (!value.isObject())
+                return false;
+            const QJsonObject item = value.toObject();
+            const QString name = item.value(QStringLiteral("name")).toString();
+            const QString childId = item.value(QStringLiteral("_id")).toString();
+            if (name.isEmpty() || name == QStringLiteral(".") || name == QStringLiteral("..")
+                    || name.contains(QLatin1Char('/')) || name.contains(QLatin1Char('\\'))
+                    || name.contains(QChar::Null) || names.contains(name) || childId.isEmpty())
+                return false;
+            names.insert(name);
+            if (kind == QStringLiteral("folders")) {
+                if (!validateFolder(item, ids, depth + 1))
+                    return false;
+            } else {
+                if (ids->contains(childId))
+                    return false;
+                ids->insert(childId);
+            }
+        }
+    }
+    return true;
+}
+
+void appendTreeEntries(const QJsonObject &folder, const QString &prefix, QVariantList *entries)
+{
+    for (const QString &kind : {QStringLiteral("docs"), QStringLiteral("fileRefs"),
+                                QStringLiteral("folders")}) {
+        const QString type = kind == QStringLiteral("docs") ? QStringLiteral("doc")
+                : kind == QStringLiteral("fileRefs") ? QStringLiteral("file") : QStringLiteral("folder");
+        for (const QJsonValue &value : folder.value(kind).toArray()) {
+            const QJsonObject item = value.toObject();
+            const QString path = prefix + QLatin1Char('/') + item.value(QStringLiteral("name")).toString();
+            entries->append(QVariantMap{{QStringLiteral("path"), path}, {QStringLiteral("type"), type}});
+            if (type == QStringLiteral("folder"))
+                appendTreeEntries(item, path, entries);
+        }
+    }
+}
+
+void collectDocuments(const QJsonObject &folder, const QString &prefix, QList<QPair<QString, QString>> *docs)
+{
+    for (const QJsonValue &value : folder.value(QStringLiteral("docs")).toArray()) {
+        const QJsonObject doc = value.toObject();
+        docs->append(qMakePair(prefix + QLatin1Char('/') + doc.value(QStringLiteral("name")).toString(),
+                               doc.value(QStringLiteral("_id")).toString()));
+    }
+    for (const QJsonValue &value : folder.value(QStringLiteral("folders")).toArray()) {
+        const QJsonObject child = value.toObject();
+        collectDocuments(child, prefix + QLatin1Char('/') + child.value(QStringLiteral("name")).toString(), docs);
+    }
+}
+
 bool visitFolder(const QJsonObject &folder, const QString &prefix, const QString &wanted,
                  const QString &kind, QString *found, int depth)
 {
@@ -32,6 +98,23 @@ bool visitFolder(const QJsonObject &folder, const QString &prefix, const QString
     }
     return true;
 }
+}
+
+bool validProjectFileTree(const QJsonObject &project)
+{
+    const QJsonArray roots = project.value(QStringLiteral("rootFolder")).toArray();
+    QSet<QString> ids;
+    return roots.size() == 1 && roots.at(0).isObject()
+            && validateFolder(roots.at(0).toObject(), &ids, 0);
+}
+
+QVariantList projectFileTreeEntries(const QJsonObject &project)
+{
+    QVariantList entries;
+    if (validProjectFileTree(project))
+        appendTreeEntries(project.value(QStringLiteral("rootFolder")).toArray().at(0).toObject(),
+                          QString(), &entries);
+    return entries;
 }
 
 QByteArray socketCookieHeader(const QByteArray &browserCookies, const QList<QNetworkCookie> &responseCookies,
@@ -92,9 +175,75 @@ bool findProjectDoc(const QJsonObject &project, const QString &path, QString *id
     return findProjectEntity(project, path, QStringLiteral("docs"), id, error);
 }
 
+bool findProjectMainDoc(const QJsonObject &project, QString *path, QString *id, QString *error)
+{
+    path->clear();
+    id->clear();
+    if (!validProjectFileTree(project)) {
+        *error = QCoreApplication::translate("SocketProtocol", "The server returned an invalid project file tree.");
+        return false;
+    }
+    QList<QPair<QString, QString>> docs;
+    collectDocuments(project.value(QStringLiteral("rootFolder")).toArray().at(0).toObject(), QString(), &docs);
+    const QJsonValue root = project.value(QStringLiteral("rootDoc_id"));
+    if (!root.isUndefined() && !root.isNull() && !root.isString()) {
+        *error = QCoreApplication::translate("SocketProtocol", "The server returned an invalid main document.");
+        return false;
+    }
+    const QString rootId = root.toString();
+    if (!rootId.isEmpty()) {
+        for (const auto &doc : docs) {
+            if (doc.second == rootId) {
+                *path = doc.first;
+                *id = doc.second;
+                error->clear();
+                return true;
+            }
+        }
+        *error = QCoreApplication::translate("SocketProtocol", "The project's main document was not found. Choose a file.");
+        return false;
+    }
+    QList<QPair<QString, QString>> tex;
+    for (const auto &doc : docs) {
+        if (doc.first == QStringLiteral("/main.tex")) {
+            *path = doc.first;
+            *id = doc.second;
+            error->clear();
+            return true;
+        }
+        if (doc.first.endsWith(QStringLiteral(".tex"), Qt::CaseInsensitive))
+            tex.append(doc);
+    }
+    if (tex.size() == 1) {
+        *path = tex.first().first;
+        *id = tex.first().second;
+        error->clear();
+        return true;
+    }
+    *error = QCoreApplication::translate("SocketProtocol", "Could not determine the main document. Choose a file.");
+    return false;
+}
+
 bool findProjectFile(const QJsonObject &project, const QString &path, QString *id, QString *error)
 {
     return findProjectEntity(project, path, QStringLiteral("fileRefs"), id, error);
+}
+
+bool findProjectFolder(const QJsonObject &project, const QString &path, QString *id, QString *error)
+{
+    const QJsonArray roots = project.value(QStringLiteral("rootFolder")).toArray();
+    if (path == QStringLiteral("/") || path.isEmpty()) {
+        *id = roots.size() == 1 && roots.at(0).isObject()
+                ? roots.at(0).toObject().value(QStringLiteral("_id")).toString() : QString();
+        if (!id->isEmpty()) {
+            error->clear();
+            return true;
+        }
+    } else {
+        return findProjectEntity(project, path, QStringLiteral("folders"), id, error);
+    }
+    *error = QCoreApplication::translate("SocketProtocol", "Could not find the selected file in the project.");
+    return false;
 }
 
 QJsonArray makeTextOperation(const QString &before, const QString &after)

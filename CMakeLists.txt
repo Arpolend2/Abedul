@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(ru.auroraos.OverleafClient VERSION 1.3.2 LANGUAGES C CXX)
+project(ru.auroraos.OverleafClient VERSION 1.4.0 LANGUAGES C CXX)
 
 find_package(Qt5 REQUIRED COMPONENTS Core Gui Network Qml Quick)
 find_package(PkgConfig REQUIRED)
@@ -150,6 +150,8 @@ add_executable(${PROJECT_NAME}
     src/latexhighlighter.h
     src/overleafclient.cpp
     src/overleafclient.h
+    src/projectcollaboration.cpp
+    src/projectcollaboration.h
     src/overleafhtml.cpp
     src/overleafhtml.h
     src/projectlist.cpp
@@ -166,7 +168,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     "${CMAKE_BINARY_DIR}/pdfium/include")
 target_link_directories(${PROJECT_NAME} PRIVATE
     "${CMAKE_BINARY_DIR}/pdfium/lib" "${CMAKE_BINARY_DIR}/libjpeg-build")
-target_compile_definitions(${PROJECT_NAME} PRIVATE TASK_PRIORITY_RATIO=10)
+target_compile_definitions(${PROJECT_NAME} PRIVATE TASK_PRIORITY_RATIO=10 ABEDUL_VERSION="${PROJECT_VERSION}")
 set_target_properties(${PROJECT_NAME} PROPERTIES
     BUILD_RPATH "${CMAKE_BINARY_DIR}/vendor/PdfViewer/amberpdf;${CMAKE_BINARY_DIR}/pdfium/lib;${CMAKE_BINARY_DIR}/libjpeg-build"
     INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/share/${PROJECT_NAME}/lib")
@@ -185,12 +187,17 @@ add_custom_target(distfiles SOURCES
     rpm/${PROJECT_NAME}.spec
     qml/OverleafClient.qml
     qml/pages/AutoLogin.qml
+    qml/pages/BackgroundLogin.qml
+    qml/pages/BackgroundCookieService.qml
+    qml/pages/ServerCookieRemoval.qml
+    qml/pages/ServerCookieRemovalService.qml
     qml/pages/CoverPage.qml
     qml/pages/CompileRootPage.qml
     qml/pages/EditorPage.qml
     qml/pages/LoginPage.qml
     qml/pages/ProjectsPage.qml
     qml/pages/ProjectFilesPage.qml
+    qml/pages/ProjectCollaborationPage.qml
     qml/pages/WebLoginPage.qml
     qml/pages/WheelScroll.qml
     qml/pages/MouseNavigation.qml
@@ -213,12 +220,14 @@ if(BUILD_TESTS)
         src/socketprotocol.cpp src/socketprotocol.h
         src/realtimesocket.cpp src/realtimesocket.h
         src/overleafclient.cpp src/overleafclient.h
+        src/projectcollaboration.cpp src/projectcollaboration.h
         src/overleafhtml.cpp src/overleafhtml.h)
     target_include_directories(projectlist_tests PRIVATE src)
     target_link_libraries(projectlist_tests PRIVATE Qt5::Core Qt5::Gui Qt5::Network Qt5::Test)
     add_test(NAME projectlist_tests COMMAND projectlist_tests)
     add_executable(autologin_tests
         tests/autologin_tests.cpp src/overleafclient.cpp src/overleafclient.h
+        src/projectcollaboration.cpp src/projectcollaboration.h
         src/compileoutput.cpp src/compileoutput.h
         src/synctex.cpp src/synctex.h
         src/socketprotocol.cpp src/socketprotocol.h
@@ -239,12 +248,18 @@ if(BUILD_TESTS)
     set_target_properties(autologin_tests PROPERTIES
         BUILD_RPATH "${CMAKE_BINARY_DIR}/vendor/PdfViewer/amberpdf;${CMAKE_BINARY_DIR}/pdfium/lib;${CMAKE_BINARY_DIR}/libjpeg-build")
     target_compile_definitions(autologin_tests PRIVATE
+        ABEDUL_VERSION="${PROJECT_VERSION}"
         AUTO_LOGIN_QML_PATH="${CMAKE_CURRENT_SOURCE_DIR}/qml/pages/AutoLogin.qml"
         ABEDUL_TRANSLATION_DIR="${CMAKE_CURRENT_BINARY_DIR}/translations")
     target_link_libraries(autologin_tests PRIVATE
         Qt5::Core Qt5::Gui Qt5::Network Qt5::Qml Qt5::Quick Qt5::Test amberpdf
         "${CMAKE_BINARY_DIR}/pdfium/lib/libpdfium.so")
     add_test(NAME autologin_tests COMMAND autologin_tests)
+    add_executable(projectcollaboration_tests tests/projectcollaboration_tests.cpp
+        src/projectcollaboration.cpp src/projectcollaboration.h src/overleafhtml.cpp src/overleafhtml.h)
+    target_include_directories(projectcollaboration_tests PRIVATE src)
+    target_link_libraries(projectcollaboration_tests PRIVATE Qt5::Core Qt5::Network Qt5::Test)
+    add_test(NAME projectcollaboration_tests COMMAND projectcollaboration_tests)
     set_tests_properties(autologin_tests PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=minimal;QT_QUICK_BACKEND=software;QSG_RENDER_LOOP=basic;QML2_IMPORT_PATH=${CMAKE_BINARY_DIR}/qml")
     add_executable(draftstore_tests tests/draftstore_tests.cpp src/draftstore.cpp src/draftstore.h)

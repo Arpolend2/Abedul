@@ -50,8 +50,6 @@ Item {
         onLoadingChanged: controller.updateNavigation()
         onLoadFinished: {
             controller.loadSucceeded = httpStatusCode >= 200 && httpStatusCode < 300
-            if (controller.loadSucceeded && controller.client)
-                controller.client.confirmServerConnection(controller.webView.url, httpStatusCode)
             if (httpStatusCode < 200 || httpStatusCode >= 400)
                 controller.loadFailed(httpStatusCode)
             controller.updateNavigation()
