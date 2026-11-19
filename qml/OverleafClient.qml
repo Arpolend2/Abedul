@@ -50,7 +50,7 @@ ApplicationWindow {
     Notification {
         id: archiveNotification
         appName: "Abedul"
-        appIcon: "ru.auroraos.OverleafClient"
+        appIcon: "ru.arpolend.abedul"
         summary: qsTr("Project ZIP downloaded")
         body: qsTr("Saved in Downloads.")
     }

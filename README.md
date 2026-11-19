@@ -24,6 +24,8 @@ An independent native Overleaf client for Aurora OS.
 
 Run `git submodule update --init --recursive` and build `CMakeLists.txt` with Aurora SDK 5.2.1. PDFium and libjpeg-turbo are downloaded during the build; source archives must include `vendor/PdfViewer`.
 
+The package identifier is `ru.arpolend.abedul`. It installs separately from the former `ru.auroraos.OverleafClient` package; accounts, settings, caches and drafts are not migrated.
+
 ## Third-party code
 
 [PDF Viewer](https://gitlab.com/omprussia/examples/PdfViewer) (AmberPDF and adapted QML), [PDFium binaries](https://github.com/bblanchon/pdfium-binaries), and [libjpeg-turbo](https://github.com/libjpeg-turbo/libjpeg-turbo). This software is based in part on the work of the Independent JPEG Group.

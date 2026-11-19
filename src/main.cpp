@@ -19,8 +19,8 @@ int main(int argc, char **argv)
 {
     QGuiApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
     QScopedPointer<QGuiApplication> application(Aurora::Application::application(argc, argv));
-    application->setOrganizationName(QStringLiteral("ru.auroraos"));
-    application->setApplicationName(QStringLiteral("OverleafClient"));
+    application->setOrganizationName(QStringLiteral("ru.arpolend"));
+    application->setApplicationName(QStringLiteral("abedul"));
     application->setApplicationDisplayName(QStringLiteral("Abedul"));
     application->setApplicationVersion(QStringLiteral(ABEDUL_VERSION));
     QTranslator translator;
