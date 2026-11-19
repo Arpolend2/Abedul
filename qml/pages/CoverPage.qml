@@ -6,6 +6,9 @@ CoverBackground {
     property var navigationStack
     property var editorPage: overleafClient.coverEditor
     readonly property bool showProjectList: !editorPage || overleafClient.coverShowsProjects
+    readonly property bool showOnlyPdf: !!editorPage && !editorPage.coverSideBySide
+                                         && !!editorPage.attachedPdfPage && !!navigationStack
+                                         && navigationStack.currentPage === editorPage.attachedPdfPage
     property string lastOpenedProjectId: ""
     property bool wasVisible: false
     property string navigationError: ""
@@ -90,7 +93,7 @@ CoverBackground {
                 return false
             if (stack.currentPage === projects && stack.nextPage(projects) === editorPage) {
                 stack.navigateForward(PageStackAction.Immediate)
-            } else if (stack.currentPage !== editorPage) {
+            } else if (stack.currentPage !== editorPage && !showOnlyPdf) {
                 var editor = stack.find(function(page) { return page === cover.editorPage })
                 if (!editor) {
                     navigationError = qsTr("The open project is no longer available.")
@@ -109,29 +112,21 @@ CoverBackground {
     }
 
     Column {
-        anchors.fill: parent
-        anchors.margins: Theme.paddingMedium
-        anchors.bottomMargin: cover.editorPage ? Theme.itemSizeMedium : Theme.paddingMedium
+        id: coverContent
+        objectName: "coverContent"
+        anchors {
+            left: parent.left
+            right: parent.right
+            top: parent.top
+            bottom: cover.editorPage ? cover.coverActionArea.top : parent.bottom
+            leftMargin: Theme.paddingSmall
+            rightMargin: Theme.paddingSmall
+            topMargin: Theme.paddingSmall
+            bottomMargin: cover.editorPage ? Theme.paddingSmall : Theme.paddingMedium
+        }
         spacing: Theme.paddingSmall
         clip: true
 
-        Label {
-            objectName: "coverTitle"
-            width: parent.width
-            visible: !!cover.editorPage && !cover.showProjectList
-            text: visible ? cover.editorPage.projectName : ""
-            font.pixelSize: Theme.fontSizeSmall
-            truncationMode: TruncationMode.Fade
-        }
-        Label {
-            objectName: "coverFile"
-            width: parent.width
-            visible: !!cover.editorPage && !cover.showProjectList && text.length > 0
-            text: cover.editorPage && !cover.showProjectList ? cover.editorPage.coverSnippetFile : ""
-            color: Theme.secondaryColor
-            font.pixelSize: Theme.fontSizeExtraSmall
-            truncationMode: TruncationMode.Fade
-        }
         Label {
             objectName: "coverStatus"
             width: parent.width
@@ -150,19 +145,21 @@ CoverBackground {
                     : ""
         }
         Item {
+            id: snippetArea
             width: parent.width
-            height: Math.max(snippet.height, pdfPeek.visible ? pdfPeek.height : 0)
+            height: Math.max(snippet.visible ? snippet.height : 0, pdfPeek.visible ? pdfPeek.height : 0)
             visible: !!cover.editorPage && !cover.showProjectList
 
             Label {
                 id: snippet
                 objectName: "coverSnippet"
+                visible: !cover.showOnlyPdf
                 width: pdfPeek.visible ? (parent.width - Theme.paddingSmall) / 2 : parent.width
                 x: pdfPeek.visible && overleafClient.pdfOnLeft ? parent.width - width : 0
                 text: cover.editorPage && !cover.showProjectList ? cover.editorPage.coverSnippet : ""
                 textFormat: Text.PlainText
                 font.family: "monospace"
-                font.pixelSize: Theme.fontSizeExtraSmall
+                font.pixelSize: Math.round(Theme.fontSizeExtraSmall * 0.6)
                 wrapMode: Text.NoWrap
                 clip: true
             }
@@ -170,14 +167,17 @@ CoverBackground {
                 id: pdfPeek
                 objectName: "coverPdfPeek"
                 visible: !!cover.editorPage && !cover.showProjectList && !!cover.editorPage.coverPdfSnapshot
-                width: (parent.width - Theme.paddingSmall) / 2
-                height: Math.min(cover.height * 0.55, width * 1.6)
-                x: overleafClient.pdfOnLeft ? 0 : parent.width - width
+                         && (cover.editorPage.coverSideBySide || cover.showOnlyPdf)
+                width: cover.showOnlyPdf ? parent.width : (parent.width - Theme.paddingSmall) / 2
+                height: Math.max(0, coverContent.height - snippetArea.y)
+                x: cover.showOnlyPdf || overleafClient.pdfOnLeft ? 0 : parent.width - width
                 source: visible ? cover.editorPage.coverPdfSnapshot.url : ""
-                fillMode: Image.PreserveAspectFit
+                fillMode: Image.PreserveAspectCrop
+                clip: true
                 horizontalAlignment: Image.AlignHCenter
                 verticalAlignment: Image.AlignTop
-                cache: false
+                // ItemGrabResult URLs exist only in Qt Quick's image cache.
+                cache: true
                 smooth: true
             }
         }

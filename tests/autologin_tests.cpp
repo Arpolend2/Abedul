@@ -2,12 +2,14 @@
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
+#include <QQmlProperty>
 #include <QScopedPointer>
 #include <QTemporaryDir>
 #include <QDir>
 #include <QPainter>
 #include <QPdfWriter>
 #include <QQuickItem>
+#include <QQuickImageProvider>
 #include <QQuickView>
 #include <QQuickWindow>
 #include <QQuickRenderControl>
@@ -25,6 +27,23 @@
 #include "completionkeyfilter.h"
 #include "compileoutput.h"
 #include "projectcollaboration.h"
+
+class SingleImageProvider : public QQuickImageProvider
+{
+public:
+    SingleImageProvider() : QQuickImageProvider(QQuickImageProvider::Image) {}
+    QImage requestImage(const QString &, QSize *size, const QSize &) override
+    {
+        if (++requests > 1)
+            return QImage();
+        QImage image(40, 20, QImage::Format_ARGB32);
+        image.fill(Qt::black);
+        if (size)
+            *size = image.size();
+        return image;
+    }
+    int requests = 0;
+};
 
 class FakeCollaboration : public QObject
 {
@@ -508,6 +527,7 @@ private slots:
     void pagesAndPickersAllowLandscape();
     void russianTranslations();
     void coverShowsProjectsAndRecentEdits();
+    void coverDoesNotCaptureHiddenPdf();
     void opensProjectFilesByType();
     void folderBackNavigation();
     void protectsDraftsDuringFileChanges();
@@ -769,6 +789,8 @@ void AutoLoginTests::coverShowsProjectsAndRecentEdits()
     DraftStore drafts(directory.path());
     FakePdfClient client;
     QQmlEngine engine;
+    SingleImageProvider *provider = new SingleImageProvider;
+    engine.addImageProvider(QStringLiteral("cover-test"), provider);
     engine.rootContext()->setContextProperty(QStringLiteral("overleafClient"), &client);
     engine.rootContext()->setContextProperty(QStringLiteral("draftStore"), &drafts);
     QQmlComponent stackComponent(&engine);
@@ -805,9 +827,7 @@ void AutoLoginTests::coverShowsProjectsAndRecentEdits()
     cover->setProperty("width", 240);
     cover->setProperty("height", 320);
     QCOMPARE(cover->property("visibleProjects").toList().size(), 2);
-    QObject *title = cover->findChild<QObject *>(QStringLiteral("coverTitle"));
-    QVERIFY(title);
-    QCOMPARE(title->property("text").toString(), QString());
+    QVERIFY(cover->property("showProjectList").toBool());
 
     QQmlComponent component(&engine, base.resolved(QUrl(QStringLiteral("EditorPage.qml"))));
     QVERIFY2(component.isReady(), qPrintable(component.errorString()));
@@ -818,10 +838,17 @@ void AutoLoginTests::coverShowsProjectsAndRecentEdits()
     component.completeCreate();
     client.setProperty("coverShowsProjects", false);
     client.setCoverEditor(page.data());
+    QQuickItem *coverItem = qobject_cast<QQuickItem *>(cover.data());
+    QQuickItem *content = cover->findChild<QQuickItem *>(QStringLiteral("coverContent"));
+    QQuickItem *actionArea = cover->property("coverActionArea").value<QQuickItem *>();
+    QVERIFY(coverItem && content && actionArea);
+    const qreal bottomMargin = QQmlProperty(content, QStringLiteral("anchors.bottomMargin")).read().toReal();
+    QTRY_VERIFY(qAbs(content->y() + content->height() + bottomMargin
+                     - actionArea->mapToItem(coverItem, QPointF(0, 0)).y()) < 0.1);
     stack->setProperty("attachedPage", QVariant::fromValue(page.data()));
     QVERIFY(QMetaObject::invokeMethod(cover.data(), "openCoverPage", Q_ARG(QVariant, false)));
     QCOMPARE(stack->property("currentPage").value<QObject *>(), page.data());
-    QCOMPARE(title->property("text").toString(), QStringLiteral("First"));
+    QVERIFY(!cover->property("showProjectList").toBool());
     client.setSource(QStringLiteral("/main.tex"), QStringLiteral("one\ntwo\nthree\nfour\nfive\nsix\nseven"));
     QObject *editor = page->findChild<QObject *>(QStringLiteral("draftEditor"));
     QVERIFY(editor);
@@ -834,14 +861,50 @@ void AutoLoginTests::coverShowsProjectsAndRecentEdits()
     QObject *snippet = cover->findChild<QObject *>(QStringLiteral("coverSnippet"));
     QVERIFY(snippet);
     QCOMPARE(snippet->property("text").toString(), page->property("coverSnippet").toString());
+    QStringList longLines;
+    for (int i = 0; i < 40; ++i)
+        longLines.append(QStringLiteral("line %1").arg(i));
+    const QString longText = longLines.join(QLatin1Char('\n'));
+    editor->setProperty("text", longText);
+    textEdit->setProperty("cursorPosition", longText.indexOf(QStringLiteral("line 10")));
+    QVERIFY(QMetaObject::invokeMethod(page.data(), "updateCoverSnippet"));
+    QStringList coverLines = page->property("coverSnippet").toString().split(QLatin1Char('\n'));
+    QCOMPARE(coverLines.first(), QStringLiteral("line 8"));
+    QCOMPARE(coverLines.size(), 30);
+    QVERIFY(coverLines.contains(QStringLiteral("line 10")));
+    textEdit->setProperty("cursorPosition", longText.indexOf(QStringLiteral("line 39")));
+    QVERIFY(QMetaObject::invokeMethod(page.data(), "updateCoverSnippet"));
+    coverLines = page->property("coverSnippet").toString().split(QLatin1Char('\n'));
+    QCOMPARE(coverLines.first(), QStringLiteral("line 37"));
+    QCOMPARE(coverLines.last(), QStringLiteral("line 39"));
+    QQuickItem *snippetItem = qobject_cast<QQuickItem *>(snippet);
+    QVERIFY(snippetItem);
+    QTRY_VERIFY(qAbs(snippetItem->mapToItem(content, QPointF(0, 0)).y()) < 0.1);
+    QQmlComponent cachedImageComponent(&engine);
+    cachedImageComponent.setData("import QtQuick 2.0\nImage { source: \"image://cover-test/preview\" }", QUrl());
+    QScopedPointer<QObject> cachedImage(cachedImageComponent.create());
+    QVERIFY2(cachedImage, qPrintable(cachedImageComponent.errorString()));
+    QTRY_COMPARE(cachedImage->property("status").toInt(), 1);
     QQmlComponent snapshotComponent(&engine);
-    snapshotComponent.setData("import QtQuick 2.0\nQtObject { property url url: \"\" }", QUrl());
+    snapshotComponent.setData("import QtQuick 2.0\nQtObject { property url url: \"image://cover-test/preview\" }", QUrl());
     QScopedPointer<QObject> snapshot(snapshotComponent.create());
     QVERIFY(snapshot);
+    QObject *panes = page->findChild<QObject *>(QStringLiteral("editorPanes"));
+    QVERIFY(panes);
+    panes->setProperty("sideBySide", true);
     page->setProperty("coverPdfSnapshot", QVariant::fromValue(snapshot.data()));
     QObject *pdfPeek = cover->findChild<QObject *>(QStringLiteral("coverPdfPeek"));
     QVERIFY(pdfPeek);
     QVERIFY(pdfPeek->property("visible").toBool());
+    QTRY_COMPARE(pdfPeek->property("status").toInt(), 1);
+    QCOMPARE(provider->requests, 1);
+    QQuickItem *pdfItem = qobject_cast<QQuickItem *>(pdfPeek);
+    QVERIFY(pdfItem);
+    QTRY_VERIFY(qAbs(pdfItem->mapToItem(content, QPointF(0, pdfItem->height())).y()
+                     - content->height()) < 0.1);
+    QVERIFY(pdfItem->clip());
+    QVERIFY(pdfPeek->property("paintedWidth").toReal() >= pdfItem->width());
+    QVERIFY(pdfPeek->property("paintedHeight").toReal() >= pdfItem->height());
     QTest::qWait(100);
     QVERIFY2(snippet->property("x").toReal() < pdfPeek->property("x").toReal(),
              qPrintable(QStringLiteral("cover width=%1 text width=%2 x=%3 preview width=%4 x=%5")
@@ -851,6 +914,28 @@ void AutoLoginTests::coverShowsProjectsAndRecentEdits()
     client.setProperty("pdfOnLeft", true);
     QTRY_VERIFY(pdfPeek->property("x").toReal() < snippet->property("x").toReal());
     client.setProperty("pdfOnLeft", false);
+    panes->setProperty("sideBySide", false);
+    QTRY_VERIFY(snippet->property("visible").toBool());
+    QTRY_VERIFY(!pdfPeek->property("visible").toBool());
+    QCOMPARE(snippet->property("width").toReal(), content->width());
+    QQmlComponent pdfPageComponent(&engine);
+    pdfPageComponent.setData("import QtQuick 2.0\nItem { property Item contentHost: Item {} }", QUrl());
+    QScopedPointer<QObject> pdfPage(pdfPageComponent.create());
+    QVERIFY2(pdfPage, qPrintable(pdfPageComponent.errorString()));
+    page->setProperty("attachedPdfPage", QVariant::fromValue(pdfPage.data()));
+    stack->setProperty("currentPage", QVariant::fromValue(pdfPage.data()));
+    QTRY_VERIFY(pdfPeek->property("visible").toBool());
+    QVERIFY(!snippet->property("visible").toBool());
+    QCOMPARE(pdfPeek->property("width").toReal(), content->width());
+    QTRY_VERIFY(qAbs(pdfItem->mapToItem(content, QPointF(0, pdfItem->height())).y()
+                     - content->height()) < 0.1);
+    QVERIFY(pdfPeek->property("paintedWidth").toReal() >= pdfItem->width());
+    QVERIFY(pdfPeek->property("paintedHeight").toReal() >= pdfItem->height());
+    QVERIFY(QMetaObject::invokeMethod(cover.data(), "openCoverPage", Q_ARG(QVariant, false)));
+    QCOMPARE(stack->property("currentPage").value<QObject *>(), pdfPage.data());
+    stack->setProperty("currentPage", QVariant::fromValue(page.data()));
+    page->setProperty("attachedPdfPage", QVariant::fromValue(static_cast<QObject *>(nullptr)));
+    panes->setProperty("sideBySide", true);
     QObject *zip = cover->findChild<QObject *>(QStringLiteral("coverDownloadZipWithoutPdf"));
     QVERIFY(zip);
     QVERIFY(QMetaObject::invokeMethod(zip, "triggered"));
@@ -861,11 +946,11 @@ void AutoLoginTests::coverShowsProjectsAndRecentEdits()
     stack->setProperty("busy", true);
     QVERIFY(QMetaObject::invokeMethod(back, "triggered"));
     QCOMPARE(stack->property("currentPage").value<QObject *>(), page.data());
-    QCOMPARE(title->property("text").toString(), QStringLiteral("First"));
+    QVERIFY(!cover->property("showProjectList").toBool());
     QVERIFY(!cover->property("navigationError").toString().isEmpty());
     stack->setProperty("busy", false);
     QVERIFY(QMetaObject::invokeMethod(back, "triggered"));
-    QCOMPARE(title->property("text").toString(), QString());
+    QVERIFY(cover->property("showProjectList").toBool());
     QVERIFY(!pdfPeek->property("visible").toBool());
     QCOMPARE(stack->property("currentPage").value<QObject *>(), &projectsPage);
     QObject *repeater = cover->findChild<QObject *>(QStringLiteral("coverProjects"));
@@ -881,10 +966,63 @@ void AutoLoginTests::coverShowsProjectsAndRecentEdits()
     QVERIFY(forward);
     stack->setProperty("editorInStack", false);
     QVERIFY(QMetaObject::invokeMethod(forward, "triggered"));
-    QCOMPARE(title->property("text").toString(), QStringLiteral("First"));
+    QVERIFY(!cover->property("showProjectList").toBool());
     QCOMPARE(stack->property("currentPage").value<QObject *>(), page.data());
     client.setCoverEditor(nullptr);
-    QCOMPARE(title->property("text").toString(), QString());
+    QVERIFY(cover->property("showProjectList").toBool());
+}
+
+void AutoLoginTests::coverDoesNotCaptureHiddenPdf()
+{
+    QTemporaryDir directory;
+    DraftStore drafts(directory.path());
+    FakePdfClient client;
+    const QString pdfPath = QDir(directory.path()).filePath(QStringLiteral("cover.pdf"));
+    {
+        QPdfWriter writer(pdfPath);
+        QPainter painter(&writer);
+        QVERIFY(painter.isActive());
+        painter.fillRect(QRect(100, 100, 3000, 4000), Qt::black);
+    }
+    QQmlEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("overleafClient"), &client);
+    engine.rootContext()->setContextProperty(QStringLiteral("draftStore"), &drafts);
+    const QUrl base = QUrl::fromLocalFile(QStringLiteral(AUTO_LOGIN_QML_PATH));
+    QQmlComponent component(&engine, base.resolved(QUrl(QStringLiteral("EditorPage.qml"))));
+    QScopedPointer<QObject> page(component.create());
+    QVERIFY2(page, qPrintable(component.errorString()));
+    QQuickRenderControl renderControl;
+    QQuickWindow window(&renderControl);
+    window.resize(800, 600);
+    QQuickItem *pageItem = qobject_cast<QQuickItem *>(page.data());
+    QVERIFY(pageItem);
+    pageItem->setParentItem(window.contentItem());
+    pageItem->setSize(QSizeF(800, 600));
+    page->setProperty("largeScreen", true);
+    page->setProperty("visible", true);
+    client.setPdfPath(pdfPath);
+    QObject *loader = page->findChild<QObject *>(QStringLiteral("pdfLoader"));
+    QVERIFY(loader);
+    QTRY_VERIFY(loader->property("item").value<QObject *>());
+    QObject *preview = loader->property("item").value<QObject *>();
+    QTRY_COMPARE(preview->property("status").toInt(), 2);
+    pageItem->setVisible(false);
+    QVERIFY(!preview->property("visible").toBool());
+    QObject snapshot;
+    page->setProperty("coverPdfSnapshot", QVariant::fromValue(&snapshot));
+    QVERIFY(QMetaObject::invokeMethod(page.data(), "captureCoverPdf"));
+    QCOMPARE(page->property("coverPdfSnapshot").value<QObject *>(), &snapshot);
+    QVERIFY(page->property("coverPdfError").toString().isEmpty());
+    QWindow foreground;
+    foreground.show();
+    foreground.requestActivate();
+    QTRY_COMPARE(QGuiApplication::applicationState(), Qt::ApplicationActive);
+    QObject *timer = page->findChild<QObject *>(QStringLiteral("coverPdfTimer"));
+    QVERIFY(timer);
+    pageItem->setVisible(true);
+    QTRY_VERIFY(preview->property("visible").toBool());
+    QTRY_VERIFY(timer->property("running").toBool());
+    pageItem->setVisible(false);
 }
 
 void AutoLoginTests::attachedEditorSurvivesNavigation()

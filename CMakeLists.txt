@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(ru.arpolend.abedul VERSION 1.4.0 LANGUAGES C CXX)
+project(ru.arpolend.abedul VERSION 1.4.2 LANGUAGES C CXX)
 
 find_package(Qt5 REQUIRED COMPONENTS Core Gui Network Qml Quick)
 find_package(PkgConfig REQUIRED)

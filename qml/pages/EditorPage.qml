@@ -31,6 +31,7 @@ Page {
     property string coverSnippet: ""
     property string coverSnippetFile: ""
     property bool coverHasEdits: false
+    readonly property bool coverSideBySide: panes.sideBySide
     readonly property var latexSuggestion: {
         var input = editor._editor
         if (page.offline || !page.initialized || !editor.enabled || input.inputMethodComposing
@@ -228,7 +229,12 @@ Page {
             objectName: "separatePdfPage"
             allowedOrientations: Orientation.All
             property alias contentHost: pdfPageHost
-            onStatusChanged: if (status === PageStatus.Active) pdfNavigationTimer.restart()
+            onStatusChanged: {
+                if (status === PageStatus.Active) {
+                    pdfNavigationTimer.restart()
+                    page.scheduleCoverPdfCapture()
+                }
+            }
             onWidthChanged: if (status === PageStatus.Active) pdfNavigationTimer.restart()
             onHeightChanged: if (status === PageStatus.Active) pdfNavigationTimer.restart()
             Component.onDestruction: if (page.attachedPdfPage === separatePdfPage) page.attachedPdfPage = null
@@ -346,20 +352,21 @@ Page {
         var line = text.substring(0, position).split("\n").length - 1
         var lines = text.split("\n")
         var start = Math.max(0, line - 2)
-        coverSnippet = lines.slice(start, start + 5).join("\n")
+        coverSnippet = lines.slice(start, start + 30).join("\n")
         coverSnippetFile = currentFile
     }
 
     function scheduleCoverPdfCapture() {
         ++coverPdfRevision
-        if (pdfLoader.item && pdfLoader.item.status === PdfDocument.Ready
+        if (pdfLoader.item && pdfLoader.item.visible && pdfLoader.item.status === PdfDocument.Ready
                 && Qt.application.state === Qt.ApplicationActive)
             coverPdfTimer.restart()
     }
 
     function captureCoverPdf() {
         var view = pdfLoader.item
-        if (!view || view.status !== PdfDocument.Ready || view.width <= 0 || view.height <= 0)
+        if (!view || !view.visible || Qt.application.state !== Qt.ApplicationActive
+                || view.status !== PdfDocument.Ready || view.width <= 0 || view.height <= 0)
             return
         var revision = coverPdfRevision
         var pdfPath = overleafClient.pdfPath
@@ -368,7 +375,8 @@ Page {
         var targetHeight = Math.max(1, Math.round(view.height * scale))
         var started = view.grabToImage(function(result) {
             if (revision !== page.coverPdfRevision || pdfPath !== overleafClient.pdfPath
-                    || view !== pdfLoader.item)
+                    || view !== pdfLoader.item || !view.visible
+                    || Qt.application.state !== Qt.ApplicationActive)
                 return
             page.coverPdfSnapshot = result
             page.coverPdfError = ""
@@ -617,6 +625,7 @@ Page {
                 initializeEditor()
             activateCover()
             pdfNavigationTimer.restart()
+            scheduleCoverPdfCapture()
         }
     }
     Component.onDestruction: {
@@ -640,8 +649,8 @@ Page {
                 page.saveDraft()
                 if (coverPdfTimer.running) {
                     coverPdfTimer.stop()
-                    page.captureCoverPdf()
                 }
+                ++page.coverPdfRevision
             } else {
                 page.scheduleCoverPdfCapture()
             }
@@ -906,6 +915,7 @@ Page {
     }
     Timer {
         id: coverPdfTimer
+        objectName: "coverPdfTimer"
         interval: 600
         onTriggered: page.captureCoverPdf()
     }
@@ -1429,6 +1439,7 @@ Page {
                             onZoomChanged: page.scheduleCoverPdfCapture()
                             onWidthChanged: page.scheduleCoverPdfCapture()
                             onHeightChanged: page.scheduleCoverPdfCapture()
+                            onVisibleChanged: page.scheduleCoverPdfCapture()
                             onStatusChanged: page.scheduleCoverPdfCapture()
                             onContentChanged: page.scheduleCoverPdfCapture()
                             onClicked: page.zoomTarget = "pdf"
