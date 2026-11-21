@@ -142,6 +142,14 @@
 </context>
 <context>
     <name>EditorPage</name>
+    <message><source>The AI returned an invalid suggestion. Try again.</source><translation>ИИ вернул некорректную подсказку. Попробуйте ещё раз.</translation></message>
+    <message><source>The AI could not uniquely locate text at the cursor. Try again.</source><translation>ИИ не смог однозначно определить текст у курсора. Попробуйте ещё раз.</translation></message>
+    <message><source>The document changed or cannot be edited. Request the suggestion again.</source><translation>Документ изменился или недоступен для редактирования. Запросите подсказку заново.</translation></message>
+    <message><source>Replace:</source><translation>Заменить:</translation></message>
+    <message><source>With:</source><translation>На:</translation></message>
+    <message><source>AI assistant</source><translation>ИИ-помощник</translation></message>
+    <message><source>Generate with AI</source><translation>Создать с помощью ИИ</translation></message>
+    <message><source>The document changed or cannot be edited. Generate the text again.</source><translation>Документ изменился или недоступен для редактирования. Сгенерируйте текст заново.</translation></message>
     <message>
         <source>SyncTeX is not available offline.</source>
         <translation>SyncTeX недоступен без подключения к сети.</translation>
@@ -863,6 +871,14 @@
 </context>
 <context>
     <name>SettingsPage</name>
+    <message><source>Enable AI assistant</source><translation>Включить ИИ-помощника</translation></message>
+    <message><source>Normal autocomplete stays on. Press Ctrl+I for an AI suggestion, then Tab to accept.</source><translation>Обычное автодополнение остаётся включённым. Нажмите Ctrl+I для подсказки ИИ, затем Tab для её принятия.</translation></message>
+    <message><source>Open AI generation from the editor menu or with Ctrl+Shift+I.</source><translation>Откройте генерацию с ИИ из меню редактора или сочетанием Ctrl+Shift+I.</translation></message>
+    <message><source>AI assistant</source><translation>ИИ-помощник</translation></message>
+    <message><source>AI editing sends the whole open file and your request to OpenRouter and an AI provider. Autocomplete sends nearby document text. Free models have usage limits. The saved API key is stored in a private app file, not encrypted.</source><translation>Для редактирования открытый файл целиком и ваш запрос отправляются OpenRouter и поставщику ИИ. Для автодополнения отправляется ближайший фрагмент документа. Использование бесплатных моделей ограничено. Ключ доступа хранится в закрытом файле приложения без шифрования.</translation></message>
+    <message><source>Sign in to OpenRouter</source><translation>Войти в OpenRouter</translation></message>
+    <message><source>Sign out of OpenRouter</source><translation>Выйти из OpenRouter</translation></message>
+    <message><source>Waiting for OpenRouter…</source><translation>Ожидание ответа OpenRouter…</translation></message>
     <message><source>About</source><translation>О приложении</translation></message>
     <message><source>Abedul is an independent native Overleaf client for Aurora OS.</source><translation>Abedul — независимый нативный клиент Overleaf для ОС Аврора.</translation></message>
     <message><source>Version: %1</source><translation>Версия: %1</translation></message>
@@ -1029,5 +1045,62 @@
         <source>Connecting…</source>
         <translation>Подключение…</translation>
     </message>
+</context>
+<context>
+    <name>AiAssistantPage</name>
+    <message><source>The document changed or cannot be edited. Generate the text again.</source><translation>Документ изменился или недоступен для редактирования. Сгенерируйте текст заново.</translation></message>
+    <message><source>Sign in to OpenRouter in Settings first.</source><translation>Сначала войдите в OpenRouter в настройках.</translation></message>
+    <message><source>AI assistant</source><translation>ИИ-помощник</translation></message>
+    <message><source>Describe the LaTeX to generate or change</source><translation>Опишите, какой LaTeX-код создать или изменить</translation></message>
+    <message><source>For example: change the table to three columns</source><translation>Например: измени таблицу на три столбца</translation></message>
+    <message><source>Generate</source><translation>Сгенерировать</translation></message>
+    <message><source>Waiting for OpenRouter…</source><translation>Ожидание ответа OpenRouter…</translation></message>
+    <message><source>Insert into document</source><translation>Вставить в документ</translation></message>
+    <message><source>Original text to replace:</source><translation>Исходный текст для замены:</translation></message>
+    <message><source>Insert at cursor:</source><translation>Вставить в месте курсора:</translation></message>
+    <message><source>Replacement:</source><translation>Новый текст:</translation></message>
+    <message><source>(remove text)</source><translation>(удалить текст)</translation></message>
+    <message><source>Apply replacement</source><translation>Применить замену</translation></message>
+    <message><source>The AI returned an invalid edit. Try again.</source><translation>ИИ вернул некорректное изменение. Попробуйте ещё раз.</translation></message>
+    <message><source>The AI could not identify an edit. Describe the change more precisely.</source><translation>ИИ не смог определить изменение. Опишите его подробнее.</translation></message>
+    <message><source>The AI could not uniquely locate the original text. Describe the change more precisely.</source><translation>ИИ не смог однозначно найти исходный текст. Опишите изменение подробнее.</translation></message>
+</context>
+<context>
+    <name>OpenRouterClient</name>
+    <message><source>Limit check: %1</source><translation>Проверка лимита: %1</translation></message>
+    <message><source>Autocomplete: %1</source><translation>Автодополнение: %1</translation></message>
+    <message><source>Try again after %1 seconds.</source><translation>Повторите через %1 секунд.</translation></message>
+    <message><source>Could not check the OpenRouter free model limit.</source><translation>Не удалось проверить лимит бесплатных моделей OpenRouter.</translation></message>
+    <message><source>The OpenRouter daily free model limit is exhausted. Try again after the UTC day resets.</source><translation>Дневной лимит бесплатных запросов OpenRouter исчерпан. Попробуйте снова после начала следующего дня по UTC.</translation></message>
+    <message><source>OpenRouter returned an invalid sign-in response. Try signing in again.</source><translation>OpenRouter вернул некорректный ответ при входе. Попробуйте войти снова.</translation></message>
+    <message><source>OpenRouter request timed out.</source><translation>Истекло время ожидания ответа OpenRouter.</translation></message>
+    <message><source>Could not save the AI setting.</source><translation>Не удалось сохранить настройку ИИ-помощника.</translation></message>
+    <message><source>The saved OpenRouter sign-in is not private. Sign in again.</source><translation>Сохранённые данные входа OpenRouter недостаточно защищены. Войдите снова.</translation></message>
+    <message><source>Could not read the saved OpenRouter sign-in.</source><translation>Не удалось прочитать сохранённые данные входа OpenRouter.</translation></message>
+    <message><source>The saved OpenRouter sign-in is invalid. Sign in again.</source><translation>Сохранённые данные входа OpenRouter неверны. Войдите снова.</translation></message>
+    <message><source>Could not protect the OpenRouter sign-in directory.</source><translation>Не удалось защитить каталог данных входа OpenRouter.</translation></message>
+    <message><source>Could not save the OpenRouter sign-in.</source><translation>Не удалось сохранить данные входа OpenRouter.</translation></message>
+    <message><source>Wait for the current request to finish.</source><translation>Дождитесь завершения текущего запроса.</translation></message>
+    <message><source>Could not create a secure sign-in request.</source><translation>Не удалось создать защищённый запрос для входа.</translation></message>
+    <message><source>Start sign-in and enter the authorization code.</source><translation>Начните вход и введите код авторизации.</translation></message>
+    <message><source>Could not remove the saved OpenRouter sign-in.</source><translation>Не удалось удалить сохранённые данные входа OpenRouter.</translation></message>
+    <message><source>Sign in and enter a request before using the assistant.</source><translation>Войдите и введите запрос для помощника.</translation></message>
+    <message><source>OpenRouter request failed (HTTP %1).</source><translation>Ошибка запроса OpenRouter (HTTP %1).</translation></message>
+    <message><source>OpenRouter request failed (HTTP %1): %2</source><translation>Ошибка запроса OpenRouter (HTTP %1): %2</translation></message>
+    <message><source>OpenRouter request failed. Check your connection.</source><translation>Не удалось выполнить запрос OpenRouter. Проверьте подключение.</translation></message>
+    <message><source>OpenRouter returned an invalid response.</source><translation>OpenRouter вернул некорректный ответ.</translation></message>
+    <message><source>OpenRouter returned an invalid key.</source><translation>OpenRouter вернул некорректный ключ.</translation></message>
+    <message><source>OpenRouter reported a model error.</source><translation>OpenRouter сообщил об ошибке модели.</translation></message>
+    <message><source>OpenRouter error: %1</source><translation>Ошибка OpenRouter: %1</translation></message>
+    <message><source>OpenRouter blocked the response. Try a different request.</source><translation>OpenRouter заблокировал ответ. Попробуйте другой запрос.</translation></message>
+    <message><source>The model reached its response limit. Try a shorter request.</source><translation>Модель достигла лимита ответа. Попробуйте более короткий запрос.</translation></message>
+    <message><source>OpenRouter returned no text. Please try again.</source><translation>OpenRouter не вернул текст. Попробуйте ещё раз.</translation></message>
+    <message><source>OpenRouter returned no text after retry. Please try again.</source><translation>OpenRouter не вернул текст после повторной попытки. Попробуйте ещё раз.</translation></message>
+</context>
+<context>
+    <name>OpenRouterLoginPage</name>
+    <message><source>Sign in to OpenRouter</source><translation>Войти в OpenRouter</translation></message>
+    <message><source>Waiting for OpenRouter…</source><translation>Ожидание ответа OpenRouter…</translation></message>
+    <message><source>Try again</source><translation>Попробовать снова</translation></message>
 </context>
 </TS>

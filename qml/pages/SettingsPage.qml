@@ -1,8 +1,12 @@
 import QtQuick 2.0
 import Sailfish.Silica 1.0
+import Abedul 1.0
 
 Page {
+    id: page
     allowedOrientations: Orientation.All
+    property string aiSettingError: ""
+    OpenRouterClient { id: aiClient; objectName: "settingsAiClient" }
 
     SilicaFlickable {
         anchors.fill: parent
@@ -45,6 +49,64 @@ Page {
                 wrapMode: Text.Wrap
                 color: Theme.secondaryColor
                 text: qsTr("Press Ctrl+S to save and compile.")
+            }
+            SectionHeader { text: qsTr("AI assistant") }
+            TextSwitch {
+                objectName: "aiEnabledSetting"
+                width: parent.width
+                text: qsTr("Enable AI assistant")
+                description: qsTr("Normal autocomplete stays on. Press Ctrl+I for an AI suggestion, then Tab to accept.")
+                checked: aiClient.aiEnabled
+                onClicked: {
+                    if (!checked) {
+                        aiClient.cancel()
+                    }
+                    aiClient.aiEnabled = checked
+                    page.aiSettingError = aiClient.aiEnabled === checked ? "" : aiClient.error
+                }
+            }
+            Label {
+                x: Theme.horizontalPageMargin
+                width: parent.width - 2 * x
+                visible: aiClient.aiEnabled
+                wrapMode: Text.Wrap
+                text: qsTr("Open AI generation from the editor menu or with Ctrl+Shift+I.")
+            }
+            Label {
+                x: Theme.horizontalPageMargin
+                width: parent.width - 2 * x
+                visible: aiClient.aiEnabled
+                wrapMode: Text.Wrap
+                text: qsTr("AI editing sends the whole open file and your request to OpenRouter and an AI provider. Autocomplete sends nearby document text. Free models have usage limits. The saved API key is stored in a private app file, not encrypted.")
+            }
+            Button {
+                objectName: "aiSignIn"
+                anchors.horizontalCenter: parent.horizontalCenter
+                visible: aiClient.aiEnabled && !aiClient.authenticated
+                enabled: !aiClient.busy
+                text: qsTr("Sign in to OpenRouter")
+                onClicked: {
+                    aiClient.beginSignIn()
+                    if (aiClient.authorizationUrl.length)
+                        pageStack.push(Qt.resolvedUrl("OpenRouterLoginPage.qml"), { "client": aiClient })
+                }
+            }
+            Button {
+                anchors.horizontalCenter: parent.horizontalCenter
+                visible: aiClient.aiEnabled && aiClient.authenticated
+                enabled: !aiClient.busy
+                text: qsTr("Sign out of OpenRouter")
+                onClicked: aiClient.signOut()
+            }
+            Label {
+                x: Theme.horizontalPageMargin
+                width: parent.width - 2 * x
+                visible: page.aiSettingError.length > 0
+                         || (aiClient.aiEnabled && (aiClient.busy || aiClient.error.length > 0))
+                wrapMode: Text.Wrap
+                color: page.aiSettingError.length || aiClient.error.length ? Theme.errorColor : Theme.secondaryColor
+                text: page.aiSettingError.length ? page.aiSettingError
+                      : aiClient.error.length ? aiClient.error : qsTr("Waiting for OpenRouter…")
             }
             SectionHeader { text: qsTr("About") }
             Label {

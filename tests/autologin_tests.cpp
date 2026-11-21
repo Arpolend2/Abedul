@@ -3,6 +3,7 @@
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QQmlProperty>
+#include <QJSValue>
 #include <QScopedPointer>
 #include <QTemporaryDir>
 #include <QDir>
@@ -15,6 +16,8 @@
 #include <QQuickRenderControl>
 #include <QWheelEvent>
 #include <QSettings>
+#include <QStandardPaths>
+#include <QNetworkProxy>
 #include <QTranslator>
 #include <QTextBlock>
 #include <QTextDocument>
@@ -25,6 +28,7 @@
 #include "pdfgeometry.h"
 #include "doubletapmonitor.h"
 #include "completionkeyfilter.h"
+#include "openrouterclient.h"
 #include "compileoutput.h"
 #include "projectcollaboration.h"
 
@@ -244,6 +248,127 @@ public:
     { ++pushes; lastUrl = url; pushProperties = properties; }
     Q_INVOKABLE void pushAttached(const QUrl &url, const QVariantMap &properties)
     { lastUrl = url; attachedProperties = properties; }
+};
+
+class FakeAiProvider : public QObject
+{
+    Q_OBJECT
+    Q_PROPERTY(bool authenticated MEMBER authenticated NOTIFY changed)
+    Q_PROPERTY(bool busy MEMBER busy NOTIFY changed)
+    Q_PROPERTY(QString error MEMBER error NOTIFY changed)
+    Q_PROPERTY(QString authorizationUrl MEMBER authorizationUrl NOTIFY changed)
+public:
+    bool authenticated = true;
+    bool busy = false;
+    QString error;
+    QString prompt;
+    QString context;
+    QString authorizationUrl = QStringLiteral("https://openrouter.ai/auth");
+    QUrl callback;
+    Q_INVOKABLE void requestEdit(const QString &instruction, const QString &source)
+    { prompt = instruction; context = source; }
+    Q_INVOKABLE void cancel() {}
+    Q_INVOKABLE bool handleAuthorizationUrl(const QUrl &url)
+    { callback = url; return url.path() == QStringLiteral("/abedul-openrouter"); }
+signals:
+    void changed();
+    void resultReady(const QString &text);
+};
+
+class IsolatedAiSettings
+{
+public:
+    IsolatedAiSettings()
+        : oldOrganization(QCoreApplication::organizationName()),
+          oldApplication(QCoreApplication::applicationName()),
+          oldFormat(QSettings::defaultFormat())
+    {
+        QSettings::setDefaultFormat(QSettings::IniFormat);
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, directory.path());
+        QCoreApplication::setOrganizationName(QStringLiteral("AbedulAiTest"));
+        QCoreApplication::setApplicationName(QStringLiteral("AiSettings"));
+    }
+    ~IsolatedAiSettings()
+    {
+        QCoreApplication::setOrganizationName(oldOrganization);
+        QCoreApplication::setApplicationName(oldApplication);
+        QSettings::setDefaultFormat(oldFormat);
+    }
+private:
+    QTemporaryDir directory;
+    QString oldOrganization;
+    QString oldApplication;
+    QSettings::Format oldFormat;
+};
+
+class IsolatedAiData
+{
+public:
+    IsolatedAiData() : previous(qgetenv("XDG_DATA_HOME"))
+    {
+        qputenv("XDG_DATA_HOME", directory.path().toUtf8());
+    }
+    ~IsolatedAiData()
+    {
+        if (previous.isNull())
+            qunsetenv("XDG_DATA_HOME");
+        else
+            qputenv("XDG_DATA_HOME", previous);
+    }
+    bool saveKey()
+    {
+        const QString path = QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
+                .filePath(QStringLiteral("openrouter"));
+        if (!QDir().mkpath(path)
+                || !QFile::setPermissions(path, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner))
+            return false;
+        QFile file(QDir(path).filePath(QStringLiteral("session")));
+        if (!file.open(QIODevice::WriteOnly)
+                || !file.setPermissions(QFile::ReadOwner | QFile::WriteOwner))
+            return false;
+        return file.write("sk-or-test-key") == 14;
+    }
+private:
+    QTemporaryDir directory;
+    QByteArray previous;
+};
+
+class LocalOnlyProxy
+{
+public:
+    LocalOnlyProxy() : previous(QNetworkProxy::applicationProxy())
+    {
+        QNetworkProxy::setApplicationProxy(QNetworkProxy(QNetworkProxy::HttpProxy, QStringLiteral("127.0.0.1"), 9));
+    }
+    ~LocalOnlyProxy() { QNetworkProxy::setApplicationProxy(previous); }
+private:
+    QNetworkProxy previous;
+};
+
+class FakeAiEditor : public QObject
+{
+    Q_OBJECT
+    Q_PROPERTY(QString currentFile MEMBER currentFile)
+public:
+    QString currentFile = QStringLiteral("main.tex");
+    QString text = QStringLiteral("Before selection after");
+    QString inserted;
+    int start = -1;
+    int end = -1;
+    int applications = 0;
+    Q_INVOKABLE QString aiDocumentText() const { return text; }
+    Q_INVOKABLE int aiCursorPosition() const { return 2; }
+    Q_INVOKABLE bool applyAiGeneration(const QString &file, const QString &original,
+                                       int from, int to, const QString &result)
+    {
+        if (file != currentFile || original != text || from < 0 || to < from || to > text.length())
+            return false;
+        start = from;
+        end = to;
+        ++applications;
+        inserted = result;
+        return true;
+    }
 };
 
 class FakeLoginClient : public QObject
@@ -524,6 +649,9 @@ private slots:
     void loadsPdfGeometry();
     void automaticLoginOnlyAfterSuccessfulProjectLoad();
     void interfaceComponentsLoad();
+    void aiGenerationSupportsLandscapeAndPreview();
+    void aiLoginLandscapeAndCallback();
+    void aiModeControlsSettingsAndEditor();
     void pagesAndPickersAllowLandscape();
     void russianTranslations();
     void coverShowsProjectsAndRecentEdits();
@@ -578,6 +706,7 @@ void AutoLoginTests::initTestCase()
     qmlRegisterType<PdfGeometry>("Abedul", 1, 0, "PdfGeometry");
     qmlRegisterType<DoubleTapMonitor>("Abedul", 1, 0, "DoubleTapMonitor");
     qmlRegisterType<CompletionKeyFilter>("Abedul", 1, 0, "CompletionKeyFilter");
+    qmlRegisterType<OpenRouterClient>("Abedul", 1, 0, "OpenRouterClient");
 }
 
 void AutoLoginTests::doubleTapRespectsClipping()
@@ -701,13 +830,255 @@ void AutoLoginTests::interfaceComponentsLoad()
                                QStringLiteral("CoverPage.qml"), QStringLiteral("OpenCachedPdf.qml"),
                                QStringLiteral("LoginPage.qml"), QStringLiteral("SettingsPage.qml"),
                                QStringLiteral("ProjectFilesPage.qml"), QStringLiteral("ProjectCollaborationPage.qml"),
-                               QStringLiteral("CompileRootPage.qml")};
+                               QStringLiteral("CompileRootPage.qml"), QStringLiteral("AiAssistantPage.qml"),
+                               QStringLiteral("OpenRouterLoginPage.qml")};
     for (const QString &page : pages) {
         QQmlComponent component(&engine, autoLoginUrl.resolved(QUrl(page)));
         QVERIFY2(component.isReady(), qPrintable(component.errorString()));
     }
     QQmlComponent window(&engine, autoLoginUrl.resolved(QUrl(QStringLiteral("../OverleafClient.qml"))));
     QVERIFY2(window.isReady(), qPrintable(window.errorString()));
+}
+
+void AutoLoginTests::aiGenerationSupportsLandscapeAndPreview()
+{
+    FakeAiProvider provider;
+    FakeAiEditor editor;
+    FakePageStack stack;
+    QQmlEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("fakeAi"), &provider);
+    engine.rootContext()->setContextProperty(QStringLiteral("fakeEditor"), &editor);
+    engine.rootContext()->setContextProperty(QStringLiteral("pageStack"), &stack);
+    const QUrl base = QUrl::fromLocalFile(QStringLiteral(AUTO_LOGIN_QML_PATH));
+    QQmlComponent component(&engine);
+    component.setData(R"(
+        import QtQuick 2.0
+        import "." as Pages
+        Pages.AiAssistantPage { client: fakeAi; editorPage: fakeEditor }
+    )", base.resolved(QUrl(QStringLiteral("AiPageTest.qml"))));
+    QScopedPointer<QObject> object(component.create());
+    QVERIFY2(object, qPrintable(component.errorString()));
+    QQuickItem *page = qobject_cast<QQuickItem *>(object.data());
+    QVERIFY(page);
+    auto *prompt = page->findChild<QQuickItem *>(QStringLiteral("aiPrompt"));
+    auto *generate = page->findChild<QQuickItem *>(QStringLiteral("aiGenerate"));
+    auto *preview = page->findChild<QQuickItem *>(QStringLiteral("aiGeneratedText"));
+    auto *original = page->findChild<QQuickItem *>(QStringLiteral("aiOriginalText"));
+    auto *insert = page->findChild<QQuickItem *>(QStringLiteral("aiInsert"));
+    auto *scroll = page->findChild<QQuickItem *>(QStringLiteral("aiGeneratorFlickable"));
+    QVERIFY(prompt && generate && original && preview && insert && scroll);
+    for (const QSizeF size : {QSizeF(1024, 600), QSizeF(600, 1024)}) {
+        page->setSize(size);
+        QTRY_COMPARE(scroll->width(), size.width());
+        QTRY_COMPARE(prompt->width(), size.width());
+        QVERIFY(generate->width() <= size.width());
+    }
+    prompt->setProperty("text", QStringLiteral("Make a table"));
+    void *mouseEvent = nullptr;
+    QVERIFY(QMetaObject::invokeMethod(generate, "clicked", QGenericArgument("QQuickMouseEvent*", &mouseEvent)));
+    QCOMPARE(provider.prompt, QStringLiteral("Make a table"));
+    QCOMPARE(provider.context, editor.text);
+    emit provider.resultReady(QStringLiteral(
+        "{\"action\":\"replace\",\"old_text\":\"selection\",\"new_text\":\"\\\\begin{tabular}{c}\"}"));
+    QTRY_COMPARE(original->property("text").toString(), QStringLiteral("selection"));
+    QTRY_COMPARE(preview->property("text").toString(), QStringLiteral("\\begin{tabular}{c}"));
+    for (const QSizeF size : {QSizeF(1024, 600), QSizeF(600, 1024)}) {
+        page->setSize(size);
+        QTRY_COMPARE(scroll->width(), size.width());
+        QVERIFY(original->x() >= 0 && original->x() + original->width() <= size.width());
+        QVERIFY(preview->x() >= 0 && preview->x() + preview->width() <= size.width());
+        QVERIFY(insert->width() <= size.width());
+    }
+    QVERIFY(editor.inserted.isEmpty());
+    editor.text.append(QStringLiteral(" changed"));
+    QVERIFY(QMetaObject::invokeMethod(insert, "clicked", QGenericArgument("QQuickMouseEvent*", &mouseEvent)));
+    QVERIFY(editor.inserted.isEmpty());
+    QCOMPARE(stack.pops, 0);
+    QVERIFY(!page->property("insertError").toString().isEmpty());
+    editor.text = QStringLiteral("Before selection after");
+    QVERIFY(QMetaObject::invokeMethod(insert, "clicked", QGenericArgument("QQuickMouseEvent*", &mouseEvent)));
+    QCOMPARE(editor.inserted, QStringLiteral("\\begin{tabular}{c}"));
+    QCOMPARE(editor.start, 7);
+    QCOMPARE(editor.end, 16);
+    QCOMPARE(stack.pops, 1);
+
+    editor.text = QStringLiteral("same text and same text");
+    QVERIFY(QMetaObject::invokeMethod(generate, "clicked", QGenericArgument("QQuickMouseEvent*", &mouseEvent)));
+    emit provider.resultReady(QStringLiteral("{\"action\":\"replace\",\"old_text\":\"same\",\"new_text\":\"other\"}"));
+    QVERIFY(!page->property("proposalReady").toBool());
+    QVERIFY(!page->property("insertError").toString().isEmpty());
+    emit provider.resultReady(QStringLiteral("{\"action\":\"replace\",\"old_text\":\"missing\",\"new_text\":\"other\"}"));
+    QVERIFY(!page->property("proposalReady").toBool());
+    emit provider.resultReady(QStringLiteral("not JSON"));
+    QVERIFY(!page->property("proposalReady").toBool());
+
+    editor.text = QStringLiteral("Before selection after");
+    QVERIFY(QMetaObject::invokeMethod(generate, "clicked", QGenericArgument("QQuickMouseEvent*", &mouseEvent)));
+    emit provider.resultReady(QStringLiteral("```json\n{\"action\":\"replace\",\"old_text\":\"selection\",\"new_text\":\"\"}\n```"));
+    QVERIFY(page->property("proposalReady").toBool());
+    QVERIFY(QMetaObject::invokeMethod(insert, "clicked", QGenericArgument("QQuickMouseEvent*", &mouseEvent)));
+    QCOMPARE(editor.applications, 2);
+    QCOMPARE(editor.start, 7);
+    QCOMPARE(editor.end, 16);
+    QVERIFY(editor.inserted.isEmpty());
+
+    QVERIFY(QMetaObject::invokeMethod(generate, "clicked", QGenericArgument("QQuickMouseEvent*", &mouseEvent)));
+    emit provider.resultReady(QStringLiteral("{\"action\":\"insert\",\"new_text\":\"new code\"}"));
+    QVERIFY(page->property("proposalReady").toBool());
+    QVERIFY(QMetaObject::invokeMethod(insert, "clicked", QGenericArgument("QQuickMouseEvent*", &mouseEvent)));
+    QCOMPARE(editor.start, 2);
+    QCOMPARE(editor.end, 2);
+    QCOMPARE(editor.inserted, QStringLiteral("new code"));
+}
+
+void AutoLoginTests::aiModeControlsSettingsAndEditor()
+{
+    IsolatedAiSettings settings;
+    QTemporaryDir directory;
+    DraftStore drafts(directory.path());
+    FakePdfClient client;
+    QQmlEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("overleafClient"), &client);
+    engine.rootContext()->setContextProperty(QStringLiteral("draftStore"), &drafts);
+    engine.rootContext()->setContextProperty(QStringLiteral("appVersion"), QStringLiteral(ABEDUL_VERSION));
+    const QUrl base = QUrl::fromLocalFile(QStringLiteral(AUTO_LOGIN_QML_PATH));
+    QQmlComponent containerComponent(&engine);
+    containerComponent.setData(
+        "import QtQuick 2.5\nimport Sailfish.Silica 1.0\n"
+        "Item { property int status: PageStatus.Active; property int activeStatus: PageStatus.Active; "
+        "property int inactiveStatus: PageStatus.Inactive; property int navigation: 0; "
+        "property int navigationPending: 0; property int direction: 0 }", QUrl());
+    QScopedPointer<QObject> container(containerComponent.create());
+    QVERIFY2(container, qPrintable(containerComponent.errorString()));
+    QQmlComponent editorComponent(&engine, base.resolved(QUrl(QStringLiteral("EditorPage.qml"))));
+    QScopedPointer<QObject> editorPage(editorComponent.beginCreate(engine.rootContext()));
+    QVERIFY2(editorPage, qPrintable(editorComponent.errorString()));
+    editorPage->setProperty("__stack_container", QVariant::fromValue(qobject_cast<QQuickItem *>(container.data())));
+    editorComponent.completeCreate();
+    editorPage->setProperty("visible", true);
+    QObject *editor = editorPage->findChild<QObject *>(QStringLiteral("draftEditor"));
+    QObject *shortcut = editorPage->findChild<QObject *>(QStringLiteral("aiGeneratorShortcut"));
+    QObject *menu = editorPage->findChild<QObject *>(QStringLiteral("editorAiAssistant"));
+    QObject *header = editorPage->findChild<QObject *>(QStringLiteral("editorHeader"));
+    QVERIFY(editor && shortcut && menu && header);
+    QObject *pulley = header->property("pullDownMenu").value<QObject *>();
+    QVERIFY(pulley);
+    pulley->setProperty("active", true);
+    editorPage->setProperty("currentFile", QStringLiteral("/main.tex"));
+    editorPage->setProperty("initialized", true);
+    editor->setProperty("text", QStringLiteral("\\beg"));
+    QObject *input = editor->property("_editor").value<QObject *>();
+    QVERIFY(input);
+    input->setProperty("cursorPosition", 4);
+    QCOMPARE(editorPage->property("latexCompletion").toString(), QStringLiteral("in{}"));
+    QVERIFY(!editorPage->property("aiEnabled").toBool());
+    QVERIFY(!shortcut->property("enabled").toBool());
+    QVERIFY(!menu->property("visible").toBool());
+
+    QQmlComponent settingsComponent(&engine, base.resolved(QUrl(QStringLiteral("SettingsPage.qml"))));
+    QScopedPointer<QObject> settingsPage(settingsComponent.create());
+    QVERIFY2(settingsPage, qPrintable(settingsComponent.errorString()));
+    settingsPage->setProperty("visible", true);
+    QObject *toggle = settingsPage->findChild<QObject *>(QStringLiteral("aiEnabledSetting"));
+    QObject *signIn = settingsPage->findChild<QObject *>(QStringLiteral("aiSignIn"));
+    OpenRouterClient *settingsClient = settingsPage->findChild<OpenRouterClient *>(QStringLiteral("settingsAiClient"));
+    QVERIFY(toggle && signIn && settingsClient);
+    QQuickItem *settingsItem = qobject_cast<QQuickItem *>(settingsPage.data());
+    QQuickItem *toggleItem = qobject_cast<QQuickItem *>(toggle);
+    QQuickItem *signInItem = qobject_cast<QQuickItem *>(signIn);
+    QVERIFY(settingsItem && toggleItem && signInItem);
+    settingsItem->setSize(QSizeF(1024, 600));
+    QTRY_COMPARE(toggleItem->width(), settingsItem->width());
+    QVERIFY(signInItem->width() <= settingsItem->width());
+    QVERIFY(!toggle->property("checked").toBool());
+    QVERIFY(!signIn->property("visible").toBool());
+
+    container->setProperty("status", container->property("inactiveStatus"));
+    void *mouseEvent = nullptr;
+    QVERIFY(QMetaObject::invokeMethod(toggle, "clicked", QGenericArgument("QQuickMouseEvent*", &mouseEvent)));
+    QVERIFY2(settingsClient->aiEnabled(), qPrintable(settingsClient->error()));
+    QVERIFY(!settingsClient->authenticated());
+    QVERIFY(signIn->property("visible").toBool());
+    OpenRouterClient restored;
+    QVERIFY(restored.aiEnabled());
+    container->setProperty("status", container->property("activeStatus"));
+    QVERIFY(editorPage->property("aiEnabled").toBool());
+    QVERIFY(shortcut->property("enabled").toBool());
+    pulley->setProperty("active", true);
+    QVERIFY(menu->property("visible").toBool());
+    QCOMPARE(editorPage->property("latexCompletion").toString(), QStringLiteral("in{}"));
+
+    container->setProperty("status", container->property("inactiveStatus"));
+    QVERIFY(QMetaObject::invokeMethod(toggle, "clicked", QGenericArgument("QQuickMouseEvent*", &mouseEvent)));
+    QVERIFY(!signIn->property("visible").toBool());
+    restored.reload();
+    QVERIFY(!restored.aiEnabled());
+    container->setProperty("status", container->property("activeStatus"));
+    QVERIFY(!editorPage->property("aiEnabled").toBool());
+    QVERIFY(!shortcut->property("enabled").toBool());
+    QVERIFY(!menu->property("visible").toBool());
+    QCOMPARE(editorPage->property("latexCompletion").toString(), QStringLiteral("in{}"));
+}
+
+void AutoLoginTests::aiLoginLandscapeAndCallback()
+{
+    QTemporaryDir modules;
+    QVERIFY(modules.isValid());
+    const QString path = modules.path() + QStringLiteral("/ru/auroraos/WebView");
+    QVERIFY(QDir().mkpath(path));
+    const QList<QPair<QString, QByteArray>> files = {
+        {QStringLiteral("qmldir"), QByteArray("module ru.auroraos.WebView\nWebView 1.0 WebView.qml\n"
+                                             "TouchInput 1.0 TouchInput.qml\nKeyboardInput 1.0 KeyboardInput.qml\n"
+                                             "LoadRequestExtension 1.0 LoadRequestExtension.qml\n")},
+        {QStringLiteral("WebView.qml"), QByteArray("import QtQuick 2.0\nItem { property url url }\n")},
+        {QStringLiteral("TouchInput.qml"), QByteArray("import QtQuick 2.0\nItem {}\n")},
+        {QStringLiteral("KeyboardInput.qml"), QByteArray("import QtQuick 2.0\nItem {}\n")},
+        {QStringLiteral("LoadRequestExtension.qml"), QByteArray("import QtQuick 2.0\nItem {}\n")}
+    };
+    for (const auto &entry : files) {
+        QFile file(path + QLatin1Char('/') + entry.first);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QCOMPARE(file.write(entry.second), qint64(entry.second.size()));
+    }
+    FakeAiProvider provider;
+    FakePageStack stack;
+    QQmlEngine engine;
+    engine.addImportPath(modules.path());
+    engine.rootContext()->setContextProperty(QStringLiteral("fakeAi"), &provider);
+    engine.rootContext()->setContextProperty(QStringLiteral("pageStack"), &stack);
+    const QUrl base = QUrl::fromLocalFile(QStringLiteral(AUTO_LOGIN_QML_PATH));
+    QQmlComponent component(&engine);
+    component.setData(R"(
+        import QtQuick 2.0
+        import "." as Pages
+        Pages.OpenRouterLoginPage { client: fakeAi }
+    )", base.resolved(QUrl(QStringLiteral("AiLoginTest.qml"))));
+    QScopedPointer<QObject> object(component.create());
+    QVERIFY2(object, qPrintable(component.errorString()));
+    QQuickItem *page = qobject_cast<QQuickItem *>(object.data());
+    QQuickItem *browser = page ? page->findChild<QQuickItem *>(QStringLiteral("openRouterBrowser")) : nullptr;
+    QObject *navigation = page ? page->findChild<QObject *>(QStringLiteral("openRouterNavigation")) : nullptr;
+    QVERIFY(page && browser && navigation);
+    for (const QSizeF size : {QSizeF(1024, 600), QSizeF(600, 1024)}) {
+        page->setSize(size);
+        QTRY_COMPARE(browser->width(), size.width());
+        QVERIFY(browser->height() > size.height() / 2);
+        QVERIFY(browser->y() >= 0);
+        QVERIFY(browser->y() + browser->height() <= size.height());
+    }
+    QVariant allowed;
+    QVariantMap request;
+    request.insert(QStringLiteral("url"), QStringLiteral("http://localhost:49152/abedul-openrouter?code=test"));
+    QVERIFY(QMetaObject::invokeMethod(navigation, "beforeUrlLoad", Q_RETURN_ARG(QVariant, allowed),
+                                     Q_ARG(QVariant, QVariant(request)), Q_ARG(QVariant, QVariant(false)),
+                                     Q_ARG(QVariant, QVariant(true))));
+    QVERIFY(!allowed.toBool());
+    QCOMPARE(provider.callback.path(), QStringLiteral("/abedul-openrouter"));
+    request.insert(QStringLiteral("url"), QStringLiteral("https://openrouter.ai/auth"));
+    QVERIFY(QMetaObject::invokeMethod(navigation, "beforeUrlLoad", Q_RETURN_ARG(QVariant, allowed),
+                                     Q_ARG(QVariant, QVariant(request)), Q_ARG(QVariant, QVariant(false)),
+                                     Q_ARG(QVariant, QVariant(false))));
+    QVERIFY(allowed.toBool());
 }
 
 void AutoLoginTests::pagesAndPickersAllowLandscape()
@@ -1466,12 +1837,18 @@ void AutoLoginTests::findsAndReplacesText()
 
 void AutoLoginTests::editorScrollsLongDocuments()
 {
+    IsolatedAiSettings settings;
+    IsolatedAiData aiData;
+    LocalOnlyProxy proxy;
+    QVERIFY(aiData.saveKey());
     QTemporaryDir directory;
     DraftStore drafts(directory.path());
     FakePdfClient client;
+    FakePageStack stack;
     QQmlEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("overleafClient"), &client);
     engine.rootContext()->setContextProperty(QStringLiteral("draftStore"), &drafts);
+    engine.rootContext()->setContextProperty(QStringLiteral("pageStack"), &stack);
     const QUrl base = QUrl::fromLocalFile(QStringLiteral(AUTO_LOGIN_QML_PATH));
     QQmlComponent component(&engine, base.resolved(QUrl(QStringLiteral("EditorPage.qml"))));
     QVERIFY2(component.isReady(), qPrintable(component.errorString()));
@@ -1567,6 +1944,178 @@ void AutoLoginTests::editorScrollsLongDocuments()
     QVERIFY(searchField && textInput && previousShortcut && nextShortcut);
     window.show();
     window.requestActivate();
+    textInput->forceActiveFocus();
+    QTRY_VERIFY(textInput->hasActiveFocus());
+    OpenRouterClient *aiClient = page->findChild<OpenRouterClient *>(QStringLiteral("editorAiClient"));
+    QVERIFY(aiClient);
+    QVERIFY(aiClient->authenticated());
+    const QString longContext = QStringLiteral("a").repeated(600) + QStringLiteral("b").repeated(200);
+    QVariant contextResult;
+    QVERIFY(QMetaObject::invokeMethod(page.data(), "aiCompletionContext", Q_RETURN_ARG(QVariant, contextResult),
+                                      Q_ARG(QVariant, longContext), Q_ARG(QVariant, 600)));
+    const QVariantMap context = contextResult.value<QJSValue>().toVariant().toMap();
+    QCOMPARE(context.value(QStringLiteral("before")).toString(), QStringLiteral("a").repeated(512));
+    QCOMPARE(context.value(QStringLiteral("after")).toString(), QStringLiteral("b").repeated(128));
+    const bool oldAiEnabled = aiClient->aiEnabled();
+    aiClient->setAiEnabled(false);
+    const int disabledPushes = stack.pushes;
+    QTest::keyClick(&window, Qt::Key_I, Qt::ControlModifier);
+    QTest::keyClick(&window, Qt::Key_I, Qt::ControlModifier | Qt::ShiftModifier);
+    QCOMPARE(stack.pushes, disabledPushes);
+    QVERIFY(!aiClient->busy());
+    aiClient->setAiEnabled(true);
+    editor->setProperty("text", QStringLiteral("\\beg"));
+    textInput->setProperty("cursorPosition", 4);
+    QCOMPARE(page->property("latexCompletion").toString(), QStringLiteral("in{}"));
+    QTest::qWait(3200);
+    QVERIFY(!aiClient->busy());
+    QTest::keyClick(&window, Qt::Key_I, Qt::ControlModifier);
+    QVERIFY(aiClient->busy());
+    QVERIFY(page->property("aiCompletionPending").toBool());
+    QQuickItem *aiProgress = page->findChild<QQuickItem *>(QStringLiteral("aiCompletionProgress"));
+    QVERIFY(aiProgress && aiProgress->isVisible());
+    QCOMPARE(aiProgress->parentItem(), pane->parentItem());
+    QVERIFY(aiProgress->width() > 0 && aiProgress->width() <= pane->width());
+    QCOMPARE(aiProgress->property("leftMargin").toReal(), qreal(0));
+    QCOMPARE(aiProgress->property("rightMargin").toReal(), qreal(0));
+    const QRectF cursorRect = textInput->property("cursorRectangle").toRectF();
+    const QPointF cursorPoint = textInput->mapToItem(pane, cursorRect.topLeft());
+    QCOMPARE(aiProgress->x(), pane->x() + qMax(qreal(0), qMin(pane->width() - aiProgress->width(), cursorPoint.x())));
+    QCOMPARE(aiProgress->y(), pane->y() + qMax(qreal(0), cursorPoint.y() + cursorRect.height()));
+    QCOMPARE(page->property("latexCompletion").toString(), QStringLiteral("in{}"));
+    emit aiClient->resultReady(QStringLiteral(
+        "```json\n{\"action\":\"replace\",\"old_text\":\"\\\\beg\",\"new_text\":\"\\\\begin{}\"}\n```"));
+    aiClient->cancel();
+    QVERIFY(!aiProgress->isVisible());
+    QCOMPARE(page->property("aiSuggestion").toString(), QStringLiteral("\\begin{}"));
+    QVERIFY(page->property("latexCompletion").toString().isEmpty());
+    QQuickItem *popup = page->findChild<QQuickItem *>(QStringLiteral("latexCompletionPopup"));
+    QObject *popupText = page->findChild<QObject *>(QStringLiteral("latexCompletionPopupText"));
+    QVERIFY(popup && popupText && popup->isVisible());
+    QVERIFY(popupText->property("text").toString().contains(QStringLiteral("\\beg")));
+    QVERIFY(popupText->property("text").toString().contains(QStringLiteral("\\begin{}")));
+    QTest::keyClick(&window, Qt::Key_Tab);
+    QCOMPARE(textInput->property("text").toString(), QStringLiteral("\\begin{}"));
+
+    textInput->setProperty("cursorPosition", textInput->property("text").toString().length());
+    QTest::keyClick(&window, Qt::Key_I, Qt::ControlModifier);
+    QVERIFY(aiClient->busy());
+    textInput->setProperty("cursorPosition", 1);
+    QVERIFY(!aiClient->busy());
+    QVERIFY(!aiProgress->isVisible());
+    QVERIFY(!page->property("aiCompletionPending").toBool());
+    emit aiClient->resultReady(QStringLiteral(" stale"));
+    QVERIFY(page->property("aiSuggestion").toString().isEmpty());
+    textInput->setProperty("cursorPosition", textInput->property("text").toString().length());
+    QTest::keyClick(&window, Qt::Key_I, Qt::ControlModifier);
+    QVERIFY(aiClient->busy());
+    client.offline = true;
+    emit client.offlineChanged();
+    QVERIFY(!aiClient->busy());
+    QVERIFY(!page->property("aiCompletionPending").toBool());
+    client.offline = false;
+    emit client.offlineChanged();
+    const int pushes = stack.pushes;
+    QTest::keyClick(&window, Qt::Key_I, Qt::ControlModifier | Qt::ShiftModifier);
+    QTRY_COMPARE(stack.pushes, pushes + 1);
+    QVERIFY(stack.lastUrl.toString().endsWith(QStringLiteral("AiAssistantPage.qml")));
+    editor->setProperty("text", QStringLiteral("Line of text\n").repeated(100) + QStringLiteral("needle\nneedle"));
+    const int cursor = textInput->property("text").toString().length();
+    textInput->setProperty("cursorPosition", cursor);
+    page->setProperty("aiRequestText", editor->property("text"));
+    page->setProperty("aiRequestFile", page->property("currentFile"));
+    page->setProperty("aiRequestPosition", cursor);
+    page->setProperty("aiCompletionPending", true);
+    emit aiClient->resultReady(QStringLiteral("{\"action\":\"insert\",\"new_text\":\" AI\"}"));
+    QCOMPARE(page->property("aiSuggestion").toString(), QStringLiteral(" AI"));
+    QTest::keyClick(&window, Qt::Key_Tab);
+    QTRY_VERIFY(textInput->property("text").toString().endsWith(QStringLiteral("needle AI")));
+    page->setProperty("aiRequestText", QStringLiteral("stale"));
+    page->setProperty("aiRequestPosition", textInput->property("cursorPosition"));
+    page->setProperty("aiCompletionPending", true);
+    emit aiClient->resultReady(QStringLiteral(" stale"));
+    QVERIFY(page->property("aiSuggestion").toString().isEmpty());
+    const QString beforeMidline = textInput->property("text").toString();
+    const int midlinePosition = beforeMidline.length() - 3;
+    textInput->setProperty("cursorPosition", midlinePosition);
+    page->setProperty("aiSuggestion", QStringLiteral("inline"));
+    page->setProperty("aiRequestText", editor->property("text"));
+    page->setProperty("aiRequestFile", page->property("currentFile"));
+    page->setProperty("aiRequestPosition", midlinePosition);
+    page->setProperty("aiCompletionStart", midlinePosition);
+    page->setProperty("aiCompletionEnd", midlinePosition);
+    QVERIFY(popup && popupText);
+    QVERIFY(popup->isVisible());
+    QCOMPARE(popupText->property("text").toString(), QStringLiteral("inline"));
+    QTest::keyClick(&window, Qt::Key_Tab);
+    QCOMPARE(textInput->property("text").toString(),
+             beforeMidline.left(midlinePosition) + QStringLiteral("inline") + beforeMidline.mid(midlinePosition));
+
+    editor->setProperty("text", QStringLiteral("xabcx"));
+    textInput->setProperty("cursorPosition", 3);
+    page->setProperty("aiRequestText", editor->property("text"));
+    page->setProperty("aiRequestFile", page->property("currentFile"));
+    page->setProperty("aiRequestPosition", 3);
+    page->setProperty("aiCompletionPending", true);
+    emit aiClient->resultReady(QStringLiteral("{\"action\":\"replace\",\"old_text\":\"abc\",\"new_text\":\"z\"}"));
+    QCOMPARE(page->property("aiCompletionStart").toInt(), 1);
+    QCOMPARE(page->property("aiCompletionEnd").toInt(), 4);
+    QTest::keyClick(&window, Qt::Key_Tab);
+    QCOMPARE(textInput->property("text").toString(), QStringLiteral("xzx"));
+
+    editor->setProperty("text", QStringLiteral("aaaa"));
+    textInput->setProperty("cursorPosition", 2);
+    page->setProperty("aiRequestText", editor->property("text"));
+    page->setProperty("aiRequestFile", page->property("currentFile"));
+    page->setProperty("aiRequestPosition", 2);
+    page->setProperty("aiCompletionPending", true);
+    emit aiClient->resultReady(QStringLiteral("{\"action\":\"replace\",\"old_text\":\"aa\",\"new_text\":\"z\"}"));
+    QVERIFY(page->property("aiSuggestion").toString().isEmpty());
+    QVERIFY(!page->property("aiCompletionError").toString().isEmpty());
+    QCOMPARE(textInput->property("text").toString(), QStringLiteral("aaaa"));
+
+    page->setProperty("aiCompletionPending", true);
+    emit aiClient->resultReady(QStringLiteral("{\"action\":\"replace\",\"old_text\":\"missing\",\"new_text\":\"z\"}"));
+    QVERIFY(page->property("aiSuggestion").toString().isEmpty());
+    QVERIFY(!page->property("aiCompletionError").toString().isEmpty());
+    page->setProperty("aiCompletionPending", true);
+    emit aiClient->resultReady(QStringLiteral("not JSON"));
+    QVERIFY(page->property("aiSuggestion").toString().isEmpty());
+    QVERIFY(!page->property("aiCompletionError").toString().isEmpty());
+    QVERIFY(popup->isVisible());
+    QCOMPARE(popupText->property("text").toString(), page->property("aiCompletionError").toString());
+
+    QTest::keyClick(&window, Qt::Key_I, Qt::ControlModifier);
+    QVERIFY(aiClient->busy());
+    QTRY_VERIFY(!aiClient->busy());
+    QVERIFY(!aiProgress->isVisible());
+    QVERIFY(!aiClient->error().isEmpty());
+    QCOMPARE(page->property("aiCompletionError").toString(), aiClient->error());
+    QVERIFY(popup->isVisible());
+    QCOMPARE(popupText->property("text").toString(), aiClient->error());
+    const int errorChatPushes = stack.pushes;
+    QTest::keyClick(&window, Qt::Key_I, Qt::ControlModifier | Qt::ShiftModifier);
+    QTRY_COMPARE(stack.pushes, errorChatPushes + 1);
+    OpenRouterClient *generatorClient = page->findChild<OpenRouterClient *>(QStringLiteral("aiGeneratorClient"));
+    QVERIFY(generatorClient);
+    QVERIFY(generatorClient != aiClient);
+    QCOMPARE(stack.pushProperties.value(QStringLiteral("client")).value<QObject *>(),
+             static_cast<QObject *>(generatorClient));
+    QVERIFY(generatorClient->authenticated());
+    QVERIFY(generatorClient->error().isEmpty());
+    QVERIFY(!aiClient->error().isEmpty());
+    aiClient->signOut();
+    QVERIFY(!aiClient->authenticated());
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        QTest::keyClick(&window, Qt::Key_I, Qt::ControlModifier);
+        QVERIFY(!aiClient->busy());
+        QVERIFY(!page->property("aiCompletionPending").toBool());
+        QVERIFY(!page->property("aiCompletionError").toString().isEmpty());
+        QVERIFY(popup->isVisible());
+        QCOMPARE(popupText->property("text").toString(), aiClient->error());
+    }
+    aiClient->setAiEnabled(oldAiEnabled);
+    editor->setProperty("text", QStringLiteral("Line of text\n").repeated(100) + QStringLiteral("needle\nneedle"));
     searchField->forceActiveFocus();
     QTRY_VERIFY(searchField->hasActiveFocus());
     QVERIFY(previousShortcut->property("enabled").toBool());
@@ -1668,6 +2217,44 @@ void AutoLoginTests::editorScrollsLongDocuments()
     page->setProperty("largeScreen", true);
     window.setGeometry(0, 0, 800, 600);
     pageItem->setSize(QSizeF(800, 600));
+    textInput->forceActiveFocus();
+    QTRY_VERIFY(textInput->hasActiveFocus());
+    const int midDocument = QStringLiteral("Line of text\n").repeated(40).length();
+    textInput->setProperty("cursorPosition", midDocument);
+    QQuickItem *contentItem = qobject_cast<QQuickItem *>(pane->property("contentItem").value<QObject *>());
+    QVERIFY(contentItem);
+    const QRectF beforePolishCursor = textInput->property("cursorRectangle").toRectF();
+    const QPointF documentPoint = textInput->mapToItem(contentItem, beforePolishCursor.topLeft());
+    pane->setProperty("contentY", qMax(qreal(0), documentPoint.y() - pane->height() / 2));
+    page->setProperty("aiRequestPosition", midDocument);
+    page->setProperty("aiCompletionPending", true);
+    renderControl.polishItems();
+    QVERIFY(aiProgress->isVisible());
+    QVERIFY(aiProgress->width() > 0 && aiProgress->width() <= pane->width());
+    const QRectF middleCursor = textInput->property("cursorRectangle").toRectF();
+    const QPointF middlePoint = textInput->mapToItem(pane, middleCursor.topLeft());
+    QCOMPARE(aiProgress->x(), pane->x() + qMax(qreal(0), qMin(pane->width() - aiProgress->width(), middlePoint.x())));
+    const qreal expectedY = middlePoint.y() + middleCursor.height() + aiProgress->height() <= pane->height()
+            ? qMax(qreal(0), middlePoint.y() + middleCursor.height())
+            : qMax(qreal(0), middlePoint.y() - aiProgress->height());
+    QCOMPARE(aiProgress->y(), pane->y() + expectedY);
+    page->setProperty("aiCompletionError", QStringLiteral("OpenRouter error"));
+    QVERIFY(popup->isVisible());
+    QCOMPARE(popupText->property("text").toString(), QStringLiteral("OpenRouter error"));
+    QVERIFY(popup->x() >= 0 && popup->x() + popup->width() <= pane->width());
+    QVERIFY(popup->y() >= 0 && popup->y() + popup->height() <= pane->height());
+    page->setProperty("aiCompletionError", QString());
+    const qreal previousY = aiProgress->y();
+    pane->setProperty("contentY", pane->property("contentY").toReal() + 20);
+    QCOMPARE(aiProgress->y(), previousY - 20);
+    client.pdfOnLeft = true;
+    emit client.pdfOnLeftChanged();
+    const QPointF movedPoint = textInput->mapToItem(pane, middleCursor.topLeft());
+    QCOMPARE(aiProgress->x(), pane->x() + qMax(qreal(0), qMin(pane->width() - aiProgress->width(), movedPoint.x())));
+    QVERIFY(aiProgress->x() + aiProgress->width() <= pane->x() + pane->width());
+    client.pdfOnLeft = false;
+    emit client.pdfOnLeftChanged();
+    page->setProperty("aiCompletionPending", false);
     client.setPdfPath(pdfPath);
     QObject *loader = page->findChild<QObject *>(QStringLiteral("pdfLoader"));
     QVERIFY(loader);

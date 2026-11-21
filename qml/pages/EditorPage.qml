@@ -34,7 +34,7 @@ Page {
     readonly property bool coverSideBySide: panes.sideBySide
     readonly property var latexSuggestion: {
         var input = editor._editor
-        if (page.offline || !page.initialized || !editor.enabled || input.inputMethodComposing
+        if (page.aiSuggestion.length || page.offline || !page.initialized || !editor.enabled || input.inputMethodComposing
                 || input.selectionStart !== input.selectionEnd
                 || (currentFile.length && !/\.(tex|sty|cls|bib)$/i.test(currentFile)))
             return null
@@ -163,6 +163,156 @@ Page {
     readonly property bool completionAvailable: editor._editor.activeFocus && !!latexSuggestion
     property bool completionTabHintActive: false
     property bool completionWasAvailable: false
+    readonly property bool aiEnabled: aiClient.aiEnabled
+    property string aiSuggestion: ""
+    property string aiCompletionOriginal: ""
+    property string aiCompletionError: ""
+    property string aiClientOtherError: ""
+    property int aiCompletionStart: -1
+    property int aiCompletionEnd: -1
+    property string aiRequestText: ""
+    property string aiRequestFile: ""
+    property int aiRequestPosition: -1
+    property bool aiCompletionPending: false
+    onAiEnabledChanged: clearAiCompletion()
+    onOfflineChanged: if (page.offline) clearAiCompletion()
+    OpenRouterClient {
+        id: aiClient
+        objectName: "editorAiClient"
+        onResultReady: {
+            if (!page.aiCompletionPending)
+                return
+            page.aiCompletionPending = false
+            if (page.aiCompletionCurrent())
+                page.receiveAiCompletion(text)
+        }
+        onErrorChanged: {
+            if (page.aiCompletionPending && error.length) {
+                page.aiCompletionError = error
+                page.aiCompletionPending = false
+            } else {
+                page.aiClientOtherError = error
+            }
+        }
+    }
+    OpenRouterClient {
+        id: aiGeneratorClient
+        objectName: "aiGeneratorClient"
+    }
+    function aiCompletionCurrent() {
+        return page.aiEnabled && aiClient.authenticated && !page.offline && page.initialized
+                && page.status === PageStatus.Active
+                && editor.enabled && editor._editor.activeFocus && !editor._editor.inputMethodComposing
+                && editor._editor.selectionStart === editor._editor.selectionEnd
+                && page.currentFile === page.aiRequestFile && editor.text === page.aiRequestText
+                && editor._editor.cursorPosition === page.aiRequestPosition
+    }
+    function aiDocumentText() { return editor.text }
+    function aiSelectionStart() { return editor._editor.selectionStart }
+    function aiSelectionEnd() { return editor._editor.selectionEnd }
+    function aiCursorPosition() { return editor._editor.cursorPosition }
+    function openAiGenerator() {
+        if (!page.aiEnabled)
+            return
+        clearAiCompletion()
+        aiGeneratorClient.reload()
+        pageStack.push(Qt.resolvedUrl("AiAssistantPage.qml"),
+                       { "client": aiGeneratorClient, "editorPage": page })
+    }
+    function applyAiGeneration(file, original, start, end, result) {
+        if (page.offline || page.currentFile !== file || editor.text !== original
+                || !editor.enabled || !completionKeys.replace(start, end, result)) {
+            page.actionError = qsTr("The document changed or cannot be edited. Generate the text again.")
+            return false
+        }
+        return true
+    }
+    function clearAiCompletion() {
+        page.aiSuggestion = ""
+        page.aiCompletionOriginal = ""
+        page.aiCompletionError = ""
+        page.aiCompletionStart = -1
+        page.aiCompletionEnd = -1
+        if (page.aiCompletionPending) {
+            page.aiCompletionPending = false
+            aiClient.cancel()
+        }
+    }
+    function receiveAiCompletion(text) {
+        var response
+        try {
+            var json = text.trim()
+            if (/^```(?:json)?\s*[\r\n]/i.test(json) && /```$/.test(json))
+                json = json.replace(/^```(?:json)?\s*[\r\n]/i, "").replace(/```\s*$/, "")
+            response = JSON.parse(json)
+        } catch (e) {
+            page.aiCompletionError = qsTr("The AI returned an invalid suggestion. Try again.")
+            return
+        }
+        if (!response || (response.action !== "insert" && response.action !== "replace")
+                || typeof response.new_text !== "string" || !response.new_text.trim().length
+                || /[\r\n]/.test(response.new_text)) {
+            page.aiCompletionError = qsTr("The AI returned an invalid suggestion. Try again.")
+            return
+        }
+        var start = page.aiRequestPosition
+        var end = start
+        if (response.action === "replace") {
+            if (typeof response.old_text !== "string" || !response.old_text.length
+                    || /[\r\n]/.test(response.old_text)) {
+                page.aiCompletionError = qsTr("The AI returned an invalid suggestion. Try again.")
+                return
+            }
+            var old = response.old_text
+            var candidate = page.aiRequestText.indexOf(old, Math.max(0, page.aiRequestPosition - old.length))
+            var found = -1
+            while (candidate >= 0 && candidate <= page.aiRequestPosition) {
+                if (candidate + old.length >= page.aiRequestPosition) {
+                    if (found >= 0) {
+                        page.aiCompletionError = qsTr("The AI could not uniquely locate text at the cursor. Try again.")
+                        return
+                    }
+                    found = candidate
+                }
+                candidate = page.aiRequestText.indexOf(old, candidate + 1)
+            }
+            if (found < 0) {
+                page.aiCompletionError = qsTr("The AI could not uniquely locate text at the cursor. Try again.")
+                return
+            }
+            start = found
+            end = found + old.length
+            page.aiCompletionOriginal = old
+        }
+        page.aiCompletionStart = start
+        page.aiCompletionEnd = end
+        page.aiSuggestion = response.new_text
+    }
+    function aiCompletionContext(text, position) {
+        return {
+            before: text.substring(Math.max(0, position - 512), position),
+            after: text.substring(position, Math.min(text.length, position + 128))
+        }
+    }
+    function requestAiCompletion() {
+        if (!page.aiEnabled || page.offline || !page.initialized || !editor.enabled || aiClient.busy
+                || page.status !== PageStatus.Active || !editor._editor.activeFocus
+                || editor._editor.inputMethodComposing
+                || editor._editor.selectionStart !== editor._editor.selectionEnd)
+            return
+        page.clearAiCompletion()
+        page.aiRequestText = editor.text
+        page.aiRequestFile = page.currentFile
+        page.aiRequestPosition = editor._editor.cursorPosition
+        page.aiCompletionPending = true
+        var context = page.aiCompletionContext(editor.text, page.aiRequestPosition)
+        aiClient.requestCompletion(context.before, context.after)
+        if (!aiClient.busy) {
+            page.aiCompletionPending = false
+            if (aiClient.error.length)
+                page.aiCompletionError = aiClient.error
+        }
+    }
     onCompletionAvailableChanged: completionHintUpdate.restart()
     property var coverPdfSnapshot: null
     property string coverPdfError: ""
@@ -621,11 +771,14 @@ Page {
     }
     onStatusChanged: {
         if (status === PageStatus.Active) {
+            aiClient.reload()
             if (deferOpen)
                 initializeEditor()
             activateCover()
             pdfNavigationTimer.restart()
             scheduleCoverPdfCapture()
+        } else {
+            clearAiCompletion()
         }
     }
     Component.onDestruction: {
@@ -818,6 +971,20 @@ Page {
     }
 
     Shortcut {
+        objectName: "aiCompletionShortcut"
+        sequence: "Ctrl+I"
+        enabled: page.aiEnabled && page.status === PageStatus.Active && !page.offline
+                 && editor.enabled && editor._editor.activeFocus && !aiClient.busy
+        autoRepeat: false
+        onActivated: page.requestAiCompletion()
+    }
+    Shortcut {
+        objectName: "aiGeneratorShortcut"
+        sequence: "Ctrl+Shift+I"
+        enabled: page.aiEnabled && page.status === PageStatus.Active
+        onActivated: page.openAiGenerator()
+    }
+    Shortcut {
         objectName: "saveAndCompileShortcut"
         sequence: StandardKey.Save
         enabled: page.status === PageStatus.Active
@@ -886,7 +1053,12 @@ Page {
         onActiveFocusChanged: {
             if (editor._editor.activeFocus && !pdfHover.containsMouse)
                 page.zoomTarget = "editor"
+            page.clearAiCompletion()
         }
+        onCursorPositionChanged: page.clearAiCompletion()
+        onSelectionStartChanged: page.clearAiCompletion()
+        onSelectionEndChanged: page.clearAiCompletion()
+        onInputMethodComposingChanged: page.clearAiCompletion()
     }
 
     Timer {
@@ -958,6 +1130,12 @@ Page {
                 objectName: "editorSettings"
                 text: qsTr("Settings")
                 onClicked: pageStack.push(Qt.resolvedUrl("SettingsPage.qml"))
+            }
+            MenuItem {
+                objectName: "editorAiAssistant"
+                visible: page.aiEnabled
+                text: qsTr("Generate with AI")
+                onClicked: page.openAiGenerator()
             }
             MenuItem {
                 objectName: "projectSharing"
@@ -1078,16 +1256,19 @@ Page {
                         x: Theme.horizontalPageMargin
                         width: parent.width - 2 * x
                         wrapMode: Text.Wrap
+                        textFormat: Text.PlainText
                         color: Theme.errorColor
                         visible: draftStore.error.length > 0 || overleafClient.sourceError.length > 0
                                  || (page.offline && overleafClient.error && overleafClient.error.length > 0)
                                  || page.actionError.length > 0 || externalPdf.error.length > 0
+                                 || (page.aiEnabled && page.aiClientOtherError.length > 0)
                                  || (overleafClient.archiveProject === page.projectId
                                      && overleafClient.archiveError.length > 0)
                         text: draftStore.error.length ? draftStore.error
                               : overleafClient.sourceError.length ? overleafClient.sourceError
                               : page.offline && overleafClient.error && overleafClient.error.length ? overleafClient.error
                               : page.actionError.length ? page.actionError
+                              : page.aiEnabled && page.aiClientOtherError.length ? page.aiClientOtherError
                               : externalPdf.error.length ? externalPdf.error
                               : overleafClient.archiveProject === page.projectId ? overleafClient.archiveError : ""
                     }
@@ -1122,6 +1303,7 @@ Page {
                         Binding { target: editor._editor; property: "readOnly"; value: page.offline }
                         onTextChanged: {
                             if (page.initialized) {
+                                page.clearAiCompletion()
                                 page.dirty = true
                                 page.coverHasEdits = true
                                 coverSnippetTimer.restart()
@@ -1136,13 +1318,14 @@ Page {
                             y: editor._editor.cursorRectangle.y
                             width: Math.max(0, parent.width - x)
                             clip: true
-                            visible: editor._editor.activeFocus && !!page.latexSuggestion
+                            visible: editor._editor.activeFocus && (!!page.latexSuggestion || page.aiSuggestion.length > 0)
+                                     && !page.aiCompletionOriginal.length
                                      && (editor._editor.cursorPosition === editor._editor.length
                                          || editor._editor.text.charAt(editor._editor.cursorPosition) === "\n")
                             text: page.latexSuggestion
                                   ? page.latexSuggestion.display
                                     + (page.completionTabHintActive ? "  <- " + qsTr("Press Tab to accept") : "")
-                                  : ""
+                                  : page.aiSuggestion
                             font: editor._editor.font
                             color: editor.color
                             opacity: 0.65
@@ -1154,6 +1337,10 @@ Page {
                             parent: codePane
                             property point cursorPoint: {
                                 var scroll = codePane.contentY
+                                var editorX = editor.x
+                                var editorY = editor.y
+                                var inputX = editor._editor.x
+                                var inputY = editor._editor.y
                                 var cursor = editor._editor.cursorRectangle
                                 return editor._editor.mapToItem(codePane, cursor.x, cursor.y)
                             }
@@ -1166,28 +1353,51 @@ Page {
                             z: 3
                             color: page.editorBackground
                             border.color: editor.color
-                            visible: page.completionAvailable && !completionHint.visible
+                            visible: editor._editor.activeFocus
+                                     && (page.aiCompletionError.length > 0 || !!page.latexSuggestion || page.aiSuggestion.length > 0)
+                                     && (page.aiCompletionError.length > 0 || !completionHint.visible)
                             Text {
                                 id: popupText
                                 objectName: "latexCompletionPopupText"
                                 anchors.centerIn: parent
                                 width: Math.min(implicitWidth, parent.width - Theme.paddingMedium * 2)
                                 wrapMode: Text.Wrap
-                                text: page.latexSuggestion
+                                textFormat: Text.PlainText
+                                text: page.aiCompletionError.length ? page.aiCompletionError
+                                      : page.latexSuggestion
                                       ? page.latexSuggestion.display
                                         + (page.completionTabHintActive ? "  <- " + qsTr("Press Tab to accept") : "")
-                                      : ""
+                                      : page.aiCompletionOriginal.length
+                                        ? qsTr("Replace:") + " " + page.aiCompletionOriginal
+                                          + "\n" + qsTr("With:") + " " + page.aiSuggestion
+                                        : page.aiSuggestion
                                 font: editor._editor.font
-                                color: editor.color
+                                color: page.aiCompletionError.length ? Theme.errorColor : editor.color
                             }
                         }
                         CompletionKeyFilter {
                             id: completionKeys
                             objectName: "latexCompletionKeyFilter"
                             target: editor._editor
-                            enabled: !!page.latexSuggestion
-                                     && (page.latexSuggestion.snippet || page.latexCompletion.length > 0)
+                            enabled: (!!page.latexSuggestion
+                                     && (page.latexSuggestion.snippet || page.latexCompletion.length > 0))
+                                     || page.aiSuggestion.length > 0
                             onAccepted: {
+                                if (!page.latexSuggestion && page.aiSuggestion.length) {
+                                    var aiText = page.aiSuggestion
+                                    var aiStart = page.aiCompletionStart
+                                    var aiEnd = page.aiCompletionEnd
+                                    if (page.currentFile !== page.aiRequestFile || editor.text !== page.aiRequestText
+                                            || editor._editor.cursorPosition !== page.aiRequestPosition
+                                            || !completionKeys.replace(aiStart, aiEnd, aiText)) {
+                                        page.clearAiCompletion()
+                                        page.aiCompletionError = qsTr("The document changed or cannot be edited. Request the suggestion again.")
+                                        return
+                                    }
+                                    page.clearAiCompletion()
+                                    editor._editor.cursorPosition = aiStart + aiText.length
+                                    return
+                                }
                                 var text = page.latexCompletion
                                 var position = editor._editor.cursorPosition
                                 if (page.latexSuggestion.snippet) {
@@ -1228,6 +1438,24 @@ Page {
                         page.zoomTarget = "editor"
                         page.adjustZoom(direction)
                     }
+                }
+                ProgressBar {
+                    objectName: "aiCompletionProgress"
+                    parent: panes
+                    property point cursorPoint: completionPopup.cursorPoint
+                    x: codePane.x + Math.max(0, Math.min(codePane.width - width, cursorPoint.x))
+                    y: codePane.y + (cursorPoint.y + editor._editor.cursorRectangle.height + height <= codePane.height
+                       ? Math.max(0, cursorPoint.y + editor._editor.cursorRectangle.height)
+                       : Math.max(0, cursorPoint.y - height))
+                    width: Math.min(codePane.width / 3, Theme.itemSizeLarge * 2)
+                    height: Theme.paddingLarge
+                    leftMargin: 0
+                    rightMargin: 0
+                    visible: page.aiCompletionPending
+                             && cursorPoint.y + editor._editor.cursorRectangle.height > 0
+                             && cursorPoint.y < codePane.height
+                    indeterminate: true
+                    z: 4
                 }
                 Rectangle {
                     objectName: "sourceLoadingIndicator"

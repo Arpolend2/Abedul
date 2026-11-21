@@ -14,6 +14,7 @@
 #include "pdfgeometry.h"
 #include "doubletapmonitor.h"
 #include "completionkeyfilter.h"
+#include "openrouterclient.h"
 
 int main(int argc, char **argv)
 {
@@ -36,6 +37,7 @@ int main(int argc, char **argv)
     qmlRegisterType<PdfGeometry>("Abedul", 1, 0, "PdfGeometry");
     qmlRegisterType<DoubleTapMonitor>("Abedul", 1, 0, "DoubleTapMonitor");
     qmlRegisterType<CompletionKeyFilter>("Abedul", 1, 0, "CompletionKeyFilter");
+    qmlRegisterType<OpenRouterClient>("Abedul", 1, 0, "OpenRouterClient");
 
     OverleafClient client;
     DraftStore drafts;

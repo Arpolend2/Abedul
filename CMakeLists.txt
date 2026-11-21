@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(ru.arpolend.abedul VERSION 1.4.2 LANGUAGES C CXX)
+project(ru.arpolend.abedul VERSION 1.5.0 LANGUAGES C CXX)
 
 find_package(Qt5 REQUIRED COMPONENTS Core Gui Network Qml Quick)
 find_package(PkgConfig REQUIRED)
@@ -142,6 +142,8 @@ add_executable(${PROJECT_NAME}
     src/doubletapmonitor.h
     src/completionkeyfilter.cpp
     src/completionkeyfilter.h
+    src/openrouterclient.cpp
+    src/openrouterclient.h
     src/socketprotocol.cpp
     src/socketprotocol.h
     src/realtimesocket.cpp
@@ -203,6 +205,8 @@ add_custom_target(distfiles SOURCES
     qml/pages/MouseNavigation.qml
     qml/pages/OpenCachedPdf.qml
     qml/pages/SettingsPage.qml
+    qml/pages/AiAssistantPage.qml
+    qml/pages/OpenRouterLoginPage.qml
 )
 
 file(WRITE "${CMAKE_BINARY_DIR}/QtCreatorDeployment.txt"
@@ -213,6 +217,11 @@ option(BUILD_TESTS "Build focused tests" OFF)
 if(BUILD_TESTS)
     find_package(Qt5 REQUIRED COMPONENTS Test)
     enable_testing()
+    add_executable(openrouterclient_tests tests/openrouterclient_tests.cpp
+        src/openrouterclient.cpp src/openrouterclient.h)
+    target_include_directories(openrouterclient_tests PRIVATE src)
+    target_link_libraries(openrouterclient_tests PRIVATE Qt5::Core Qt5::Network Qt5::Test)
+    add_test(NAME openrouterclient_tests COMMAND openrouterclient_tests)
     add_executable(projectlist_tests
         tests/projectlist_tests.cpp src/projectlist.cpp src/projectlist.h
         src/compileoutput.cpp src/compileoutput.h
@@ -238,6 +247,7 @@ if(BUILD_TESTS)
         src/pdfgeometry.cpp src/pdfgeometry.h
         src/doubletapmonitor.cpp src/doubletapmonitor.h
         src/completionkeyfilter.cpp src/completionkeyfilter.h)
+    target_sources(autologin_tests PRIVATE src/openrouterclient.cpp src/openrouterclient.h)
     target_include_directories(autologin_tests PRIVATE src)
     target_include_directories(autologin_tests PRIVATE vendor/PdfViewer/amberpdf/src
         vendor/PdfViewer/amberpdf/src/tasks "${CMAKE_BINARY_DIR}/pdfium/include")
@@ -261,7 +271,7 @@ if(BUILD_TESTS)
     target_link_libraries(projectcollaboration_tests PRIVATE Qt5::Core Qt5::Network Qt5::Test)
     add_test(NAME projectcollaboration_tests COMMAND projectcollaboration_tests)
     set_tests_properties(autologin_tests PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=minimal;QT_QUICK_BACKEND=software;QSG_RENDER_LOOP=basic;QML2_IMPORT_PATH=${CMAKE_BINARY_DIR}/qml")
+        ENVIRONMENT "QT_QPA_PLATFORM=minimal;QT_QUICK_BACKEND=software;QSG_RENDER_LOOP=basic;QML2_IMPORT_PATH=${CMAKE_BINARY_DIR}/qml;LD_LIBRARY_PATH=/usr/lib/cef:$ENV{LD_LIBRARY_PATH}")
     add_executable(draftstore_tests tests/draftstore_tests.cpp src/draftstore.cpp src/draftstore.h)
     target_include_directories(draftstore_tests PRIVATE src)
     target_link_libraries(draftstore_tests PRIVATE Qt5::Core Qt5::Test)
