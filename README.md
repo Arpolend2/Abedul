@@ -27,6 +27,10 @@ Run `git submodule update --init --recursive` and build `CMakeLists.txt` with Au
 
 The package identifier is `ru.arpolend.abedul`. It installs separately from the former `ru.auroraos.OverleafClient` package; accounts, settings, caches and drafts are not migrated.
 
+## License
+
+Abedul's original code is licensed under the [WTFPL, version 2](LICENSE). Third-party code remains under its respective licenses, including the BSD-3-Clause-licensed `qml/pages/SyncPdfView.qml` and PDF Viewer.
+
 ## Third-party code
 
 [PDF Viewer](https://gitlab.com/omprussia/examples/PdfViewer) (AmberPDF and adapted QML), [PDFium binaries](https://github.com/bblanchon/pdfium-binaries), and [libjpeg-turbo](https://github.com/libjpeg-turbo/libjpeg-turbo). This software is based in part on the work of the Independent JPEG Group.

@@ -119,7 +119,7 @@ install(CODE "
 ")
 install(FILES vendor/PdfViewer/LICENSE.BSD-3-Clause.md
     DESTINATION "share/${PROJECT_NAME}/licenses" RENAME AmberPDF-BSD-3-Clause.md)
-install(FILES README.md DESTINATION "share/${PROJECT_NAME}")
+install(FILES README.md LICENSE DESTINATION "share/${PROJECT_NAME}")
 install(FILES "${CMAKE_BINARY_DIR}/pdfium/chromium%2F7415/LICENSE"
     DESTINATION "share/${PROJECT_NAME}/licenses" RENAME PDFium-LICENSE)
 install(DIRECTORY "${CMAKE_BINARY_DIR}/pdfium/chromium%2F7415/licenses"

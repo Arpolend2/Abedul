@@ -6,7 +6,7 @@ Summary:    Native Overleaf client for Aurora OS
 Version:    1.5.0
 Release:    1
 Group:      Qt/Qt
-License:    Proprietary and BSD-3-Clause and IJG
+License:    WTFPL and BSD-3-Clause and IJG
 URL:        https://github.com/Arpolend2/Abedul
 Source0:    %{name}-%{version}.tar.bz2
 
