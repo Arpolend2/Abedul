@@ -62,6 +62,7 @@ class CollaborationTests : public QObject
 private slots:
     void chatAndCsrf();
     void inviteFailureKeepsInput();
+    void managesSharing();
     void commentsAndHistory();
     void historyPreviews();
     void sessionChangeAndHttpError();
@@ -100,6 +101,7 @@ void CollaborationTests::inviteFailureKeepsInput()
     QByteArray cookie("session=test");
     ProjectCollaboration client(&network, &server, &cookie);
     network.responses.append({200, "{\"members\":[{\"first_name\":\"Ada\",\"email\":\"ada@example.test\",\"privileges\":\"readOnly\"},{\"name\":\"Grace\",\"privileges\":\"readAndWrite\"},{\"email\":\"owner@example.test\",\"privilegeLevel\":\"owner\"},{\"name\":\"Unknown\",\"privileges\":\"other\"}]}"});
+    network.responses.append({200, "{\"invites\":[]}"});
     client.open(QStringLiteral("abc"), QStringLiteral("share"));
     QTRY_VERIFY(!client.busy());
     QCOMPARE(client.entries().at(0).toMap().value(QStringLiteral("name")).toString(), QStringLiteral("Ada"));
@@ -115,8 +117,58 @@ void CollaborationTests::inviteFailureKeepsInput()
     QTRY_VERIFY(!client.busy());
     QCOMPARE(sent.count(), 0);
     QVERIFY(client.error().contains(QStringLiteral("cannot_invite_self")));
-    const QJsonObject body = QJsonDocument::fromJson(network.bodies.at(2)).object();
+    const QJsonObject body = QJsonDocument::fromJson(network.bodies.at(3)).object();
     QCOMPARE(body.value(QStringLiteral("privileges")).toString(), QStringLiteral("readOnly"));
+}
+
+void CollaborationTests::managesSharing()
+{
+    MockNetwork network;
+    QUrl server(QStringLiteral("https://example.test"));
+    QByteArray cookie("session=test");
+    ProjectCollaboration client(&network, &server, &cookie);
+    const QByteArray members("{\"members\":[{\"user\":{\"_id\":\"user1\",\"email\":\"a@example.test\"},\"privilegeLevel\":\"readOnly\"},{\"user\":{\"_id\":\"owner1\"},\"privilegeLevel\":\"owner\"}]}");
+    const QByteArray invites("{\"invites\":[{\"_id\":\"invite1\",\"email\":\"b@example.test\",\"privileges\":\"readAndWrite\"}]}");
+    network.responses.append({200, members});
+    network.responses.append({200, invites});
+    client.open(QStringLiteral("abc"), QStringLiteral("share"));
+    QTRY_VERIFY(!client.busy());
+    QCOMPARE(client.entries().size(), 3);
+    QCOMPARE(client.entries().first().toMap().value(QStringLiteral("id")).toString(), QStringLiteral("user1"));
+    QCOMPARE(client.entries().last().toMap().value(QStringLiteral("kind")).toString(), QStringLiteral("invite"));
+    client.removeMember(QStringLiteral("owner1"));
+    QVERIFY(!client.error().isEmpty());
+    QCOMPARE(network.requests.size(), 2);
+
+    network.responses.append({200, "<meta name='ol-csrfToken' content='token'>"});
+    network.responses.append({204, ""});
+    network.responses.append({200, members});
+    network.responses.append({200, invites});
+    client.changeAccess(QStringLiteral("user1"), false);
+    QTRY_VERIFY(!client.busy());
+    QCOMPARE(network.operations.at(3), QNetworkAccessManager::PutOperation);
+    QCOMPARE(network.requests.at(3).url().path(), QStringLiteral("/project/abc/users/user1"));
+    QCOMPARE(network.requests.at(3).rawHeader("X-CSRF-Token"), QByteArray("token"));
+    QCOMPARE(QJsonDocument::fromJson(network.bodies.at(3)).object().value(QStringLiteral("privilegeLevel")).toString(),
+             QStringLiteral("readAndWrite"));
+
+    network.responses.append({200, "<meta name='ol-csrfToken' content='token'>"});
+    network.responses.append({403, "{\"error\":\"forbidden\"}"});
+    client.revokeInvite(QStringLiteral("invite1"));
+    QTRY_VERIFY(!client.busy());
+    QCOMPARE(network.operations.at(7), QNetworkAccessManager::DeleteOperation);
+    QCOMPARE(network.requests.at(7).url().path(), QStringLiteral("/project/abc/invite/invite1"));
+    QVERIFY(client.error().contains(QStringLiteral("403")));
+    QCOMPARE(client.entries().size(), 3);
+
+    network.responses.append({200, "<meta name='ol-csrfToken' content='token'>"});
+    network.responses.append({201, ""});
+    network.responses.append({200, members});
+    network.responses.append({200, invites});
+    client.resendInvite(QStringLiteral("invite1"));
+    QTRY_VERIFY(!client.busy());
+    QCOMPARE(network.operations.at(9), QNetworkAccessManager::PostOperation);
+    QCOMPARE(network.requests.at(9).url().path(), QStringLiteral("/project/abc/invite/invite1/resend"));
 }
 
 void CollaborationTests::commentsAndHistory()
@@ -182,6 +234,9 @@ void CollaborationTests::historyPreviews()
     QCOMPARE(preview.size(), 3);
     QCOMPARE(preview.at(1).toMap().value(QStringLiteral("text")).toString(), QStringLiteral("old"));
     QCOMPARE(preview.at(2).toMap().value(QStringLiteral("text")).toString(), QStringLiteral("new"));
+    const QVariantMap target = shortEntry.value(QStringLiteral("navigation")).toList().first().toMap();
+    QCOMPARE(target.value(QStringLiteral("path")).toString(), QStringLiteral("a & b.tex"));
+    QCOMPARE(target.value(QStringLiteral("text")).toString(), QStringLiteral("new"));
     QCOMPARE(QUrlQuery(network.requests.at(1).url()).queryItemValue(QStringLiteral("pathname")),
              QStringLiteral("a & b.tex"));
     QVERIFY(client.entries().at(1).toMap().value(QStringLiteral("preview")).toList().isEmpty());

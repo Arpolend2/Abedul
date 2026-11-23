@@ -3,7 +3,7 @@
 
 Name:       ru.arpolend.abedul
 Summary:    Native Overleaf client for Aurora OS
-Version:    1.5.0
+Version:    2.0.0
 Release:    1
 Group:      Qt/Qt
 License:    WTFPL and BSD-3-Clause and IJG
@@ -11,6 +11,7 @@ URL:        https://github.com/Arpolend2/Abedul
 Source0:    %{name}-%{version}.tar.bz2
 
 Requires:       sailfishsilica-qt5 >= 0.10.9
+Requires:       aurora-controls
 Requires:       nemo-qml-plugin-notifications-qt5
 BuildRequires:  pkgconfig(auroraapp)
 BuildRequires:  pkgconfig(aurorawebview)

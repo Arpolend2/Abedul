@@ -1,5 +1,6 @@
 import QtQuick 2.0
 import Sailfish.Silica 1.0
+import Aurora.Controls 1.0
 
 Page {
     id: page
@@ -12,6 +13,7 @@ Page {
     property string lastProjectId: ""
     property string navigationError: ""
     property string pendingDetachedProject: ""
+    property bool pullRefreshPending: false
 
     function rememberProject(project) {
         lastProjectId = project.id
@@ -38,6 +40,21 @@ Page {
         }
     }
 
+    function refreshProjectsFromPull() {
+        if (pullRefreshPending || overleafClient.busy || overleafClient.backgroundCookiePending)
+            return
+        pullRefreshPending = true
+        overleafClient.refreshProjects()
+        pullRefreshStartTimer.restart()
+    }
+
+    function finishPullRefreshIfIdle() {
+        if (!pullRefreshPending || overleafClient.busy || overleafClient.backgroundCookiePending)
+            return
+        pullRefreshPending = false
+        projectList.PullToRefresh.refreshCompleted(overleafClient.error.length === 0)
+    }
+
     function openCreateProjectDialog() {
         pageStack.push(createProjectDialog)
     }
@@ -58,6 +75,8 @@ Page {
         target: overleafClient
         ignoreUnknownSignals: true
         onProjectsChanged: if (page.status === PageStatus.Active) attachTimer.restart()
+        onBusyChanged: page.finishPullRefreshIfIdle()
+        onBackgroundCookiePendingChanged: page.finishPullRefreshIfIdle()
         onProjectTrashChanged: {
             if (action !== "trash" && action !== "delete")
                 return
@@ -107,14 +126,83 @@ Page {
                 page.attachLastProject()
         }
     }
+    Timer {
+        id: pullRefreshStartTimer
+        interval: 250
+        onTriggered: page.finishPullRefreshIfIdle()
+    }
+
+    AppBar {
+        id: projectsAppBar
+        objectName: "projectsAppBar"
+        headerText: page.showTrash ? qsTr("Trash")
+                                   : page.showArchived ? qsTr("Archived projects")
+                                                       : qsTr("Projects")
+        maximumHeaderWidth: Theme.dp(180)
+
+        AppBarButton {
+            objectName: "createProject"
+            text: qsTr("New project")
+            context: qsTr("New project")
+            icon.source: "image://theme/icon-m-add"
+            layoutDirection: Qt.LeftToRight
+            visible: !page.showArchived && !page.showTrash
+            enabled: overleafClient.authenticated && overleafClient.offline !== true && !overleafClient.busy
+                     && !overleafClient.projectCreationBusy
+            onClicked: page.openCreateProjectDialog()
+        }
+        AppBarButton {
+            objectName: "showArchived"
+            text: page.showArchived ? qsTr("Projects") : qsTr("Archive")
+            context: page.showArchived ? qsTr("Projects") : qsTr("Archive")
+            icon.source: "image://theme/icon-m-file-archive-folder"
+            layoutDirection: Qt.LeftToRight
+            visible: !page.showTrash
+            onClicked: page.showArchived = !page.showArchived
+        }
+        AppBarButton {
+            objectName: "showTrash"
+            text: page.showTrash ? qsTr("Projects") : qsTr("Trash")
+            context: page.showTrash ? qsTr("Projects") : qsTr("Trash")
+            icon.source: page.showTrash ? "image://theme/icon-m-file-folder"
+                                         : "image://theme/icon-m-delete"
+            layoutDirection: Qt.LeftToRight
+            onClicked: {
+                page.showTrash = !page.showTrash
+                page.showArchived = false
+            }
+        }
+        AppBarButton {
+            objectName: "changeServer"
+            text: qsTr("Server")
+            context: qsTr("Server")
+            icon.source: "image://theme/icon-m-lan"
+            layoutDirection: Qt.LeftToRight
+            enabled: !overleafClient.busy
+            onClicked: pageStack.pop()
+        }
+        AppBarButton {
+            objectName: "projectSettings"
+            text: qsTr("Settings")
+            context: qsTr("Settings")
+            icon.source: "image://theme/icon-splus-setting"
+            layoutDirection: Qt.LeftToRight
+            onClicked: pageStack.push(Qt.resolvedUrl("SettingsPage.qml"))
+        }
+    }
 
     SilicaListView {
         id: projectList
         objectName: "projectList"
-        anchors.fill: parent
+        anchors.top: projectsAppBar.bottom
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        PullToRefresh.enabled: !overleafClient.busy && !overleafClient.backgroundCookiePending
+        PullToRefresh.description: qsTr("Pull down to refresh projects")
+        PullToRefresh.refreshHandler: function() { page.refreshProjectsFromPull() }
         header: Column {
             width: parent.width
-            PageHeader { title: page.showTrash ? qsTr("Trash") : page.showArchived ? qsTr("Archived projects") : qsTr("Projects") }
             Label {
                 objectName: "projectCreationError"
                 x: Theme.horizontalPageMargin
@@ -146,7 +234,7 @@ Page {
                       ? qsTr("Connecting in the background…")
                       : overleafClient.offline === true ? qsTr("Offline: cached projects may be out of date.")
                       : overleafClient.busy ? qsTr("Showing cached projects while updating…")
-                                          : qsTr("Showing cached projects. Refresh to update.")
+                                          : qsTr("Showing cached projects. Pull down to refresh.")
             }
         }
         model: {
@@ -158,46 +246,6 @@ Page {
                     result.push(projects[i])
             }
             return result
-        }
-        PullDownMenu {
-            MenuItem {
-                objectName: "refreshProjects"
-                text: qsTr("Refresh")
-                enabled: !overleafClient.busy && !overleafClient.backgroundCookiePending
-                onClicked: overleafClient.refreshProjects()
-            }
-            MenuItem {
-                objectName: "createProject"
-                visible: !page.showArchived && !page.showTrash
-                enabled: overleafClient.authenticated && overleafClient.offline !== true && !overleafClient.busy
-                         && !overleafClient.projectCreationBusy
-                text: qsTr("New project")
-                onClicked: page.openCreateProjectDialog()
-            }
-            MenuItem {
-                objectName: "projectSettings"
-                text: qsTr("Settings")
-                onClicked: pageStack.push(Qt.resolvedUrl("SettingsPage.qml"))
-            }
-            MenuItem {
-                objectName: "changeServer"
-                text: qsTr("Pick a different server")
-                enabled: !overleafClient.busy
-                onClicked: pageStack.pop()
-            }
-            MenuItem {
-                objectName: "showTrash"
-                text: page.showTrash ? qsTr("Show projects") : qsTr("Trash")
-                onClicked: {
-                    page.showTrash = !page.showTrash
-                    page.showArchived = false
-                }
-            }
-            MenuItem {
-                visible: !page.showTrash
-                text: page.showArchived ? qsTr("Show projects") : qsTr("Show archived projects")
-                onClicked: page.showArchived = !page.showArchived
-            }
         }
         delegate: ListItem {
             width: ListView.view.width

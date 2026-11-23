@@ -1,11 +1,14 @@
 import QtQuick 2.0
 import Sailfish.Silica 1.0
 
-Page {
+Rectangle {
     id: page
-    allowedOrientations: Orientation.All
+    objectName: "aiGeneratorPopup"
     property var client
     property var editorPage
+    property color textColor: Theme.primaryColor
+    property color backgroundColor: "black"
+    property bool showing: false
     property string originalText: ""
     property int originalStart: 0
     property int originalEnd: 0
@@ -15,7 +18,38 @@ Page {
     property bool proposalReady: false
     property bool replacement: false
     property string insertError: ""
+    visible: showing
+    color: backgroundColor
+    border.color: textColor
+    radius: Theme.paddingLarge
+    width: Math.min(parent.width, Theme.itemSizeLarge * 5)
+    height: Math.min(parent.height, Theme.itemSizeLarge * 8,
+                     content.height + 2 * Theme.paddingLarge)
     Component.onDestruction: if (client && client.busy) client.cancel()
+
+    function open() {
+        if (!showing) {
+            originalText = ""
+            originalStart = 0
+            originalEnd = 0
+            originalFile = ""
+            resultText = ""
+            replacedText = ""
+            proposalReady = false
+            replacement = false
+            insertError = ""
+            instruction.text = ""
+            showing = true
+        }
+        if (client.authenticated)
+            instruction.forceActiveFocus()
+    }
+
+    function close() {
+        if (client && client.busy)
+            client.cancel()
+        showing = false
+    }
 
     function receiveProposal(text) {
         page.proposalReady = false
@@ -62,14 +96,29 @@ Page {
         page.proposalReady = true
     }
 
+    MouseArea { anchors.fill: parent }
     SilicaFlickable {
         objectName: "aiGeneratorFlickable"
         anchors.fill: parent
+        anchors.margins: Theme.paddingLarge
         contentHeight: content.height
+        clip: true
         Column {
             id: content
             width: parent.width
-            PageHeader { title: qsTr("AI assistant") }
+            Item {
+                width: parent.width
+                height: Theme.itemSizeSmall
+                Label {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.leftMargin: Theme.paddingMedium
+                    text: qsTr("AI assistant")
+                    color: page.textColor
+                    truncationMode: TruncationMode.Fade
+                }
+            }
             Label {
                 x: Theme.horizontalPageMargin
                 width: parent.width - 2 * x
@@ -88,6 +137,7 @@ Page {
             Button {
                 objectName: "aiGenerate"
                 anchors.horizontalCenter: parent.horizontalCenter
+                width: Math.min(parent.width, Theme.buttonWidthMedium)
                 visible: client.authenticated
                 enabled: !client.busy && instruction.text.trim().length > 0
                 text: qsTr("Generate")
@@ -149,12 +199,13 @@ Page {
             Button {
                 objectName: "aiInsert"
                 anchors.horizontalCenter: parent.horizontalCenter
+                width: Math.min(parent.width, Theme.buttonWidthMedium)
                 visible: page.proposalReady
                 text: page.replacement ? qsTr("Apply replacement") : qsTr("Insert into document")
                 onClicked: {
                     if (editorPage.applyAiGeneration(page.originalFile, page.originalText,
                                                      page.originalStart, page.originalEnd, page.resultText))
-                        pageStack.pop()
+                        page.close()
                     else
                         page.insertError = qsTr("The document changed or cannot be edited. Generate the text again.")
                 }
@@ -173,6 +224,6 @@ Page {
     }
     Connections {
         target: page.client
-        onResultReady: page.receiveProposal(text)
+        onResultReady: if (page.showing) page.receiveProposal(text)
     }
 }

@@ -49,6 +49,7 @@
 </context>
 <context>
     <name>CompileRootPage</name>
+    <message><source>Pull down to refresh</source><translation>Потяните вниз, чтобы обновить</translation></message>
     <message>
         <source>Choose main document</source>
         <translation>Выберите главный документ</translation>
@@ -142,13 +143,17 @@
 </context>
 <context>
     <name>EditorPage</name>
+    <message><source>Enter what you want to calculate or know about</source><translation>Введите, что нужно вычислить или узнать</translation></message>
+    <message><source>Sci-Hub</source><translation>Sci-Hub</translation></message>
+    <message><source>DOI or article URL</source><translation>DOI или ссылка на статью</translation></message>
+    <message><source>Could not open the address. Check the Sci-Hub address in Settings.</source><translation>Не удалось открыть ссылку. Проверьте адрес Sci-Hub в настройках.</translation></message>
     <message><source>The AI returned an invalid suggestion. Try again.</source><translation>ИИ вернул некорректную подсказку. Попробуйте ещё раз.</translation></message>
     <message><source>The AI could not uniquely locate text at the cursor. Try again.</source><translation>ИИ не смог однозначно определить текст у курсора. Попробуйте ещё раз.</translation></message>
     <message><source>The document changed or cannot be edited. Request the suggestion again.</source><translation>Документ изменился или недоступен для редактирования. Запросите подсказку заново.</translation></message>
     <message><source>Replace:</source><translation>Заменить:</translation></message>
     <message><source>With:</source><translation>На:</translation></message>
     <message><source>AI assistant</source><translation>ИИ-помощник</translation></message>
-    <message><source>Generate with AI</source><translation>Создать с помощью ИИ</translation></message>
+    <message><source>Generate with AI</source><translation>Редактор ИИ</translation></message>
     <message><source>The document changed or cannot be edited. Generate the text again.</source><translation>Документ изменился или недоступен для редактирования. Сгенерируйте текст заново.</translation></message>
     <message>
         <source>SyncTeX is not available offline.</source>
@@ -168,8 +173,33 @@
     <message><source>Could not replace the match.</source><translation>Не удалось заменить совпадение.</translation></message>
     <message><source>Replaced %1 matches.</source><translation>Заменено совпадений: %1.</translation></message>
     <message><source>Search is case-sensitive and applies to the current file.</source><translation>Поиск учитывает регистр и выполняется в текущем файле.</translation></message>
+    <message><source>Compile</source><translation>Компилировать</translation></message>
+    <message><source>Files</source><translation>Файлы</translation></message>
+    <message><source>More</source><translation>Ещё</translation></message>
+    <message><source>Keyboard shortcuts</source><translation>Сочетания клавиш</translation></message>
+    <message><source>Ctrl+S: Save and compile</source><translation>Ctrl+S: Сохранить и скомпилировать</translation></message>
+    <message><source>Ctrl+Y: Redo</source><translation>Ctrl+Y: Повторить отменённое действие</translation></message>
+    <message><source>Ctrl+W: Solve the equation with WolframAlpha</source><translation>Ctrl+W: Решить уравнение с помощью WolframAlpha</translation></message>
+    <message><source>Ctrl+R: Translate the selection or word with Reverso</source><translation>Ctrl+R: Перевести выделение или слово с помощью Reverso</translation></message>
+    <message><source>Reverso</source><translation>Reverso</translation></message>
+    <message><source>Waiting for WolframAlpha…</source><translation>Ожидание ответа WolframAlpha…</translation></message>
+    <message><source>WolframAlpha</source><translation>WolframAlpha</translation></message>
+    <message><source>Formula</source><translation>Формула</translation></message>
+    <message><source>Enter a formula</source><translation>Введите формулу</translation></message>
+    <message><source>Solve</source><translation>Решить</translation></message>
+    <message><source>Ctrl+F: Find and replace</source><translation>Ctrl+F: Поиск и замена</translation></message>
+    <message><source>Ctrl++ / Ctrl+-: Zoom the editor or PDF</source><translation>Ctrl++ / Ctrl+-: Масштаб редактора или PDF</translation></message>
+    <message><source>Ctrl+mouse wheel: Zoom under the pointer</source><translation>Ctrl+колесо мыши: масштабирование области под указателем</translation></message>
+    <message><source>Tab: Accept a completion or replace a search match</source><translation>Tab: принять автодополнение или заменить найденное совпадение</translation></message>
+    <message><source>Up / Down: Previous / next search result</source><translation>Вверх / вниз: предыдущее / следующее совпадение</translation></message>
+    <message><source>Escape: Close search</source><translation>Escape: закрыть поиск</translation></message>
+    <message><source>Ctrl+I: Request an AI completion</source><translation>Ctrl+I: запросить подсказку ИИ</translation></message>
+    <message><source>Ctrl+Shift+I: Open AI generation</source><translation>Ctrl+Shift+I: открыть генерацию ИИ</translation></message>
+    <message><source>Access</source><translation>Доступ</translation></message>
+    <message><source>Comments unavailable</source><translation>Комментарии недоступны</translation></message>
+    <message><source>AI</source><translation>ИИ</translation></message>
     <message><source>Sharing</source><translation>Доступ</translation></message>
-    <message><source>History</source><translation>История изменений</translation></message>
+    <message><source>History</source><translation>История</translation></message>
     <message><source>Comments</source><translation>Комментарии</translation></message>
     <message><source>Chat</source><translation>Чат</translation></message>
     <message>
@@ -222,7 +252,7 @@
     </message>
     <message>
         <source>Download saved project ZIP</source>
-        <translation>Скачать сохранённый проект в ZIP</translation>
+        <translation>Скачать проект в ZIP</translation>
     </message>
     <message>
         <source>Project files</source>
@@ -638,6 +668,11 @@
 </context>
 <context>
     <name>ProjectCollaboration</name>
+    <message><source>Access updated.</source><translation>Доступ изменён.</translation></message>
+    <message><source>Access removed.</source><translation>Доступ закрыт.</translation></message>
+    <message><source>Invitation revoked.</source><translation>Приглашение отозвано.</translation></message>
+    <message><source>Invitation sent again.</source><translation>Приглашение отправлено повторно.</translation></message>
+    <message><source>Invalid collaborator or invitation.</source><translation>Недопустимый участник или приглашение.</translation></message>
     <message><source>Change preview unavailable</source><translation>Просмотр изменений недоступен</translation></message>
     <message><source>Edited</source><translation>Изменён</translation></message>
     <message><source>Created</source><translation>Создан</translation></message>
@@ -668,6 +703,16 @@
 </context>
 <context>
     <name>ProjectCollaborationPage</name>
+    <message><source>Pending invitation</source><translation>Приглашение ожидает ответа</translation></message>
+    <message><source>Allow editing</source><translation>Разрешить редактирование</translation></message>
+    <message><source>Make read-only</source><translation>Только просмотр</translation></message>
+    <message><source>Resend invitation</source><translation>Отправить приглашение повторно</translation></message>
+    <message><source>Revoke invitation</source><translation>Отозвать приглашение</translation></message>
+    <message><source>Remove access</source><translation>Закрыть доступ</translation></message>
+    <message><source>Confirm revoke</source><translation>Подтвердить отзыв</translation></message>
+    <message><source>Confirm removal</source><translation>Подтвердить удаление</translation></message>
+    <message><source>Cancel</source><translation>Отмена</translation></message>
+    <message><source>Pull down to refresh</source><translation>Потяните вниз, чтобы обновить</translation></message>
     <message><source>Invited collaborators with access to this project.</source><translation>Приглашённые участники, у которых есть доступ к проекту.</translation></message>
     <message><source>No collaborators</source><translation>Нет участников</translation></message>
     <message><source>Collaborators</source><translation>Участники</translation></message>
@@ -692,6 +737,7 @@
 </context>
 <context>
     <name>ProjectFilesPage</name>
+    <message><source>Pull down to refresh</source><translation>Потяните вниз, чтобы обновить</translation></message>
     <message><source>Upload files</source><translation>Загрузить файлы</translation></message>
     <message><source>Select files to upload</source><translation>Выберите файлы для загрузки</translation></message>
     <message><source>Replace file</source><translation>Заменить файл</translation></message>
@@ -766,7 +812,8 @@
         <translation>Без сети: сохранённый список проектов может быть устаревшим.</translation>
     </message>
     <message><source>Showing cached projects while updating…</source><translation>Показаны сохранённые проекты, список обновляется…</translation></message>
-    <message><source>Showing cached projects. Refresh to update.</source><translation>Показаны сохранённые проекты. Обновите список для актуализации.</translation></message>
+    <message><source>Showing cached projects. Pull down to refresh.</source><translation>Показан кэшированный список проектов. Потяните вниз, чтобы обновить.</translation></message>
+    <message><source>Pull down to refresh projects</source><translation>Потяните вниз, чтобы обновить список проектов</translation></message>
     <message><source>Refresh</source><translation>Обновить</translation></message>
     <message><source>Trash</source><translation>Корзина</translation></message>
     <message><source>Trash is empty</source><translation>Корзина пуста</translation></message>
@@ -778,6 +825,8 @@
     <message><source>Move “%1” to the trash? You can restore it later.</source><translation>Переместить «%1» в корзину? Позже его можно восстановить.</translation></message>
     <message><source>Permanently delete “%1”? This cannot be undone.</source><translation>Удалить «%1» навсегда? Это действие нельзя отменить.</translation></message>
     <message><source>New project</source><translation>Новый проект</translation></message>
+    <message><source>Archive</source><translation>Архив</translation></message>
+    <message><source>Server</source><translation>Сервер</translation></message>
     <message><source>Project name</source><translation>Название проекта</translation></message>
     <message><source>Untitled project</source><translation>Без названия</translation></message>
     <message><source>Creating project…</source><translation>Создание проекта…</translation></message>
@@ -871,6 +920,16 @@
 </context>
 <context>
     <name>SettingsPage</name>
+    <message><source>Sci-Hub</source><translation>Sci-Hub</translation></message>
+    <message><source>Sci-Hub address</source><translation>Адрес Sci-Hub</translation></message>
+    <message><source>Enter a valid HTTPS address without credentials, query or fragment.</source><translation>Введите корректный HTTPS-адрес без учётных данных, параметров и фрагмента.</translation></message>
+    <message><source>WolframAlpha</source><translation>WolframAlpha</translation></message>
+    <message><source>WolframAlpha AppID</source><translation>AppID WolframAlpha</translation></message>
+    <message><source>Enter your AppID</source><translation>Введите свой AppID</translation></message>
+    <message><source>A Full Results API AppID is required. Register a free Wolfram ID and create an AppID on the developer portal. %1</source><translation>Нужен AppID для Full Results API. Бесплатно зарегистрируйте Wolfram ID и создайте AppID на портале разработчика. %1</translation></message>
+    <message><source>Get a WolframAlpha AppID</source><translation>Получить AppID WolframAlpha</translation></message>
+    <message><source>Press Ctrl+W in a LaTeX equation to send it to WolframAlpha.</source><translation>Нажмите Ctrl+W внутри уравнения LaTeX, чтобы отправить его в WolframAlpha.</translation></message>
+    <message><source>Get an AppID from the WolframAlpha Developer Portal. Press Ctrl+W in a LaTeX equation to send it to WolframAlpha. The AppID is stored in private app storage; equation text is sent to WolframAlpha when requested.</source><translation>Получите AppID на портале разработчиков WolframAlpha. Нажмите Ctrl+W внутри уравнения LaTeX, чтобы отправить его в WolframAlpha. AppID хранится в закрытом каталоге приложения; текст уравнения отправляется в WolframAlpha только по запросу.</translation></message>
     <message><source>Enable AI assistant</source><translation>Включить ИИ-помощника</translation></message>
     <message><source>Normal autocomplete stays on. Press Ctrl+I for an AI suggestion, then Tab to accept.</source><translation>Обычное автодополнение остаётся включённым. Нажмите Ctrl+I для подсказки ИИ, затем Tab для её принятия.</translation></message>
     <message><source>Open AI generation from the editor menu or with Ctrl+Shift+I.</source><translation>Откройте генерацию с ИИ из меню редактора или сочетанием Ctrl+Shift+I.</translation></message>
@@ -880,9 +939,19 @@
     <message><source>Sign out of OpenRouter</source><translation>Выйти из OpenRouter</translation></message>
     <message><source>Waiting for OpenRouter…</source><translation>Ожидание ответа OpenRouter…</translation></message>
     <message><source>About</source><translation>О приложении</translation></message>
-    <message><source>Abedul is an independent native Overleaf client for Aurora OS.</source><translation>Abedul — независимый нативный клиент Overleaf для ОС Аврора.</translation></message>
+    <message><source>Abedul is a unique 4-in-1 mathematical IDE for working on scientific papers. Edit Overleaf documents, translate text with Reverso, check formulas with WolframAlpha and find publications through Sci-Hub without interrupting your work.</source><translation>Abedul — уникальная математическая IDE «4 в 1» для работы над научными статьями. Редактируйте документы Overleaf, переводите текст с Reverso, проверяйте формулы через WolframAlpha и находите публикации через Sci-Hub — не прерывая работу над статьёй.</translation></message>
     <message><source>Version: %1</source><translation>Версия: %1</translation></message>
     <message><source>Source repository</source><translation>Репозиторий исходного кода</translation></message>
+    <message><source>Could not open the link.</source><translation>Не удалось открыть ссылку.</translation></message>
+    <message><source>What's new in this version</source><translation>Что нового в этой версии</translation></message>
+    <message><source>- Updated interface using the Aurora OS 5 design language.
+- AI suggestions and text generation with OpenRouter.
+- Translation with Reverso and calculations with WolframAlpha.
+- Sci-Hub links and improved project history and access management.</source><translation>- Обновлённый интерфейс в стиле ОС Аврора 5.
+- Подсказки ИИ и генерация текста с OpenRouter.
+- Перевод с Reverso и вычисления с WolframAlpha.
+- Ссылки Sci-Hub, улучшенная история проектов и управление доступом.</translation></message>
+    <message><source>References and third-party components</source><translation>Использованные материалы и сторонние компоненты</translation></message>
     <message><source>References and third-party components:</source><translation>Использованные материалы и сторонние компоненты:</translation></message>
     <message><source>This software is based in part on the work of the Independent JPEG Group.</source><translation>Это приложение частично основано на работе Independent JPEG Group.</translation></message>
     <message>
@@ -909,6 +978,65 @@
         <source>Editor font size</source>
         <translation>Размер шрифта редактора</translation>
     </message>
+</context>
+<context>
+    <name>ReversoClient</name>
+    <message><source>Wait for the current Reverso request to finish.</source><translation>Дождитесь завершения текущего запроса Reverso.</translation></message>
+    <message><source>Enter text to translate.</source><translation>Введите текст для перевода.</translation></message>
+    <message><source>The text is too long to translate.</source><translation>Текст слишком длинный для перевода.</translation></message>
+    <message><source>Select two different supported languages.</source><translation>Выберите два разных поддерживаемых языка.</translation></message>
+    <message><source>Reverso returned a response that is too large.</source><translation>Ответ Reverso слишком большой.</translation></message>
+    <message><source>The Reverso request timed out.</source><translation>Истекло время ожидания ответа Reverso.</translation></message>
+    <message><source>Reverso request failed (HTTP %1).</source><translation>Запрос Reverso завершился ошибкой (HTTP %1).</translation></message>
+    <message><source>Reverso request failed. Check your connection.</source><translation>Не удалось выполнить запрос Reverso. Проверьте подключение.</translation></message>
+    <message><source>Reverso returned an invalid response.</source><translation>Reverso вернул некорректный ответ.</translation></message>
+    <message><source>Reverso found no translations.</source><translation>Reverso не нашёл переводов.</translation></message>
+</context>
+<context>
+    <name>ReversoPopup</name>
+    <message><source>Text</source><translation>Текст</translation></message>
+    <message><source>Enter text to translate</source><translation>Введите текст для перевода</translation></message>
+    <message><source>From</source><translation>С языка</translation></message>
+    <message><source>To</source><translation>На язык</translation></message>
+    <message><source>Translate</source><translation>Перевести</translation></message>
+    <message><source>Translation</source><translation>Перевод</translation></message>
+    <message><source>Swap languages</source><translation>Поменять языки местами</translation></message>
+    <message><source>Close</source><translation>Закрыть</translation></message>
+    <message><source>Reverse translation</source><translation>Обратный перевод</translation></message>
+    <message><source>Waiting for Reverso…</source><translation>Ожидание ответа Reverso…</translation></message>
+    <message><source>Examples in context</source><translation>Примеры в контексте</translation></message>
+</context>
+<context>
+    <name>ReversoLanguagePicker</name>
+    <message><source>Russian</source><translation>Русский</translation></message>
+    <message><source>English</source><translation>Английский</translation></message>
+    <message><source>German</source><translation>Немецкий</translation></message>
+    <message><source>French</source><translation>Французский</translation></message>
+    <message><source>Spanish</source><translation>Испанский</translation></message>
+    <message><source>Italian</source><translation>Итальянский</translation></message>
+</context>
+<context>
+    <name>WolframAlphaClient</name>
+    <message><source>The WolframAlpha AppID is invalid.</source><translation>Некорректный AppID WolframAlpha.</translation></message>
+    <message><source>The saved WolframAlpha AppID is not private. Set it again in Settings.</source><translation>Сохранённый AppID WolframAlpha доступен другим пользователям системы. Укажите его заново в настройках.</translation></message>
+    <message><source>Could not read the saved WolframAlpha AppID.</source><translation>Не удалось прочитать сохранённый AppID WolframAlpha.</translation></message>
+    <message><source>The saved WolframAlpha AppID is invalid. Set it again in Settings.</source><translation>Сохранённый AppID WolframAlpha некорректен. Укажите его заново в настройках.</translation></message>
+    <message><source>Could not locate private application storage for the WolframAlpha AppID.</source><translation>Не удалось найти закрытое хранилище приложения для AppID WolframAlpha.</translation></message>
+    <message><source>Could not remove the saved WolframAlpha AppID.</source><translation>Не удалось удалить сохранённый AppID WolframAlpha.</translation></message>
+    <message><source>Could not protect the WolframAlpha AppID directory.</source><translation>Не удалось защитить каталог AppID WolframAlpha.</translation></message>
+    <message><source>Could not save the WolframAlpha AppID.</source><translation>Не удалось сохранить AppID WolframAlpha.</translation></message>
+    <message><source>Wait for the current WolframAlpha request to finish.</source><translation>Дождитесь завершения текущего запроса WolframAlpha.</translation></message>
+    <message><source>Add your WolframAlpha AppID in Settings first.</source><translation>Сначала добавьте AppID WolframAlpha в настройках.</translation></message>
+    <message><source>No equation was found at the cursor.</source><translation>В позиции курсора не найдено уравнение.</translation></message>
+    <message><source>The equation is too long to send to WolframAlpha.</source><translation>Уравнение слишком длинное для отправки в WolframAlpha.</translation></message>
+    <message><source>The WolframAlpha request timed out.</source><translation>Истекло время ожидания ответа WolframAlpha.</translation></message>
+    <message><source>WolframAlpha request failed (HTTP %1).</source><translation>Запрос WolframAlpha завершился ошибкой (HTTP %1).</translation></message>
+    <message><source>WolframAlpha request failed. Check your connection.</source><translation>Не удалось выполнить запрос WolframAlpha. Проверьте подключение.</translation></message>
+    <message><source>WolframAlpha returned a response that is too large.</source><translation>WolframAlpha вернул слишком большой ответ.</translation></message>
+    <message><source>WolframAlpha returned an invalid response.</source><translation>WolframAlpha вернул некорректный ответ.</translation></message>
+    <message><source>WolframAlpha could not process this equation.</source><translation>WolframAlpha не удалось обработать это уравнение.</translation></message>
+    <message><source>WolframAlpha could not solve this equation.</source><translation>WolframAlpha не удалось решить это уравнение.</translation></message>
+    <message><source>WolframAlpha returned no text result for this equation.</source><translation>WolframAlpha не вернул текстовый результат для этого уравнения.</translation></message>
 </context>
 <context>
     <name>SocketProtocol</name>
@@ -1047,7 +1175,8 @@
     </message>
 </context>
 <context>
-    <name>AiAssistantPage</name>
+    <name>AiAssistantPopup</name>
+    <message><source>Close</source><translation>Закрыть</translation></message>
     <message><source>The document changed or cannot be edited. Generate the text again.</source><translation>Документ изменился или недоступен для редактирования. Сгенерируйте текст заново.</translation></message>
     <message><source>Sign in to OpenRouter in Settings first.</source><translation>Сначала войдите в OpenRouter в настройках.</translation></message>
     <message><source>AI assistant</source><translation>ИИ-помощник</translation></message>

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(ru.arpolend.abedul VERSION 1.5.0 LANGUAGES C CXX)
+project(ru.arpolend.abedul VERSION 2.0.0 LANGUAGES C CXX)
 
 find_package(Qt5 REQUIRED COMPONENTS Core Gui Network Qml Quick)
 find_package(PkgConfig REQUIRED)
@@ -119,6 +119,7 @@ install(CODE "
 ")
 install(FILES vendor/PdfViewer/LICENSE.BSD-3-Clause.md
     DESTINATION "share/${PROJECT_NAME}/licenses" RENAME AmberPDF-BSD-3-Clause.md)
+install(FILES licenses/RheniumBeta-BSD-3-Clause.txt DESTINATION "share/${PROJECT_NAME}/licenses")
 install(FILES README.md LICENSE DESTINATION "share/${PROJECT_NAME}")
 install(FILES "${CMAKE_BINARY_DIR}/pdfium/chromium%2F7415/LICENSE"
     DESTINATION "share/${PROJECT_NAME}/licenses" RENAME PDFium-LICENSE)
@@ -144,6 +145,10 @@ add_executable(${PROJECT_NAME}
     src/completionkeyfilter.h
     src/openrouterclient.cpp
     src/openrouterclient.h
+    src/wolframalphaclient.cpp
+    src/wolframalphaclient.h
+    src/reversoclient.cpp
+    src/reversoclient.h
     src/socketprotocol.cpp
     src/socketprotocol.h
     src/realtimesocket.cpp
@@ -196,6 +201,18 @@ add_custom_target(distfiles SOURCES
     qml/pages/CoverPage.qml
     qml/pages/CompileRootPage.qml
     qml/pages/EditorPage.qml
+    qml/pages/ReversoPopup.qml
+    qml/pages/ReversoLanguagePicker.qml
+    qml/icons/translate.png
+    qml/icons/ai.png
+    qml/icons/comments.png
+    qml/icons/abedul-about.png
+    qml/icons/rheniumbeta.png
+    qml/icons/rheniumbeta-dark.png
+    qml/icons/rheniumbeta-light.png
+    qml/icons/scihub.png
+    qml/icons/scihub-light.png
+    qml/icons/scihub-hat.png
     qml/pages/LoginPage.qml
     qml/pages/ProjectsPage.qml
     qml/pages/ProjectFilesPage.qml
@@ -205,7 +222,7 @@ add_custom_target(distfiles SOURCES
     qml/pages/MouseNavigation.qml
     qml/pages/OpenCachedPdf.qml
     qml/pages/SettingsPage.qml
-    qml/pages/AiAssistantPage.qml
+    qml/pages/AiAssistantPopup.qml
     qml/pages/OpenRouterLoginPage.qml
 )
 
@@ -222,6 +239,25 @@ if(BUILD_TESTS)
     target_include_directories(openrouterclient_tests PRIVATE src)
     target_link_libraries(openrouterclient_tests PRIVATE Qt5::Core Qt5::Network Qt5::Test)
     add_test(NAME openrouterclient_tests COMMAND openrouterclient_tests)
+    add_executable(wolframalphaclient_tests tests/wolframalphaclient_tests.cpp
+        src/wolframalphaclient.cpp src/wolframalphaclient.h)
+    target_include_directories(wolframalphaclient_tests PRIVATE src)
+    target_link_libraries(wolframalphaclient_tests PRIVATE Qt5::Core Qt5::Network Qt5::Test)
+    add_test(NAME wolframalphaclient_tests COMMAND wolframalphaclient_tests)
+    add_executable(reversoclient_tests tests/reversoclient_tests.cpp
+        src/reversoclient.cpp src/reversoclient.h)
+    target_include_directories(reversoclient_tests PRIVATE src)
+    target_link_libraries(reversoclient_tests PRIVATE Qt5::Core Qt5::Gui Qt5::Network Qt5::Test)
+    add_test(NAME reversoclient_tests COMMAND reversoclient_tests)
+    add_executable(reversopopup_tests tests/reversopopup_tests.cpp
+        src/reversoclient.cpp src/reversoclient.h)
+    target_include_directories(reversopopup_tests PRIVATE src)
+    target_compile_definitions(reversopopup_tests PRIVATE
+        REVERSO_QML_DIR="${CMAKE_CURRENT_SOURCE_DIR}/qml/pages")
+    target_link_libraries(reversopopup_tests PRIVATE Qt5::Core Qt5::Gui Qt5::Network Qt5::Qml Qt5::Quick Qt5::Test)
+    add_test(NAME reversopopup_tests COMMAND reversopopup_tests)
+    set_tests_properties(reversopopup_tests PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=minimal;QT_QUICK_BACKEND=software;QSG_RENDER_LOOP=basic")
     add_executable(projectlist_tests
         tests/projectlist_tests.cpp src/projectlist.cpp src/projectlist.h
         src/compileoutput.cpp src/compileoutput.h
@@ -248,6 +284,8 @@ if(BUILD_TESTS)
         src/doubletapmonitor.cpp src/doubletapmonitor.h
         src/completionkeyfilter.cpp src/completionkeyfilter.h)
     target_sources(autologin_tests PRIVATE src/openrouterclient.cpp src/openrouterclient.h)
+    target_sources(autologin_tests PRIVATE src/wolframalphaclient.cpp src/wolframalphaclient.h)
+    target_sources(autologin_tests PRIVATE src/reversoclient.cpp src/reversoclient.h)
     target_include_directories(autologin_tests PRIVATE src)
     target_include_directories(autologin_tests PRIVATE vendor/PdfViewer/amberpdf/src
         vendor/PdfViewer/amberpdf/src/tasks "${CMAKE_BINARY_DIR}/pdfium/include")

@@ -7,6 +7,8 @@
 #include <QScopedPointer>
 #include <QTemporaryDir>
 #include <QDir>
+#include <QImage>
+#include <QFontMetricsF>
 #include <QPainter>
 #include <QPdfWriter>
 #include <QQuickItem>
@@ -29,6 +31,8 @@
 #include "doubletapmonitor.h"
 #include "completionkeyfilter.h"
 #include "openrouterclient.h"
+#include "wolframalphaclient.h"
+#include "reversoclient.h"
 #include "compileoutput.h"
 #include "projectcollaboration.h"
 
@@ -54,13 +58,18 @@ class FakeCollaboration : public QObject
     Q_OBJECT
     Q_PROPERTY(QAbstractItemModel* entriesModel READ entriesModel CONSTANT)
     Q_PROPERTY(QVariantList entries READ entries NOTIFY changed)
-    Q_PROPERTY(bool busy READ busy CONSTANT)
-    Q_PROPERTY(QString error READ error CONSTANT)
+    Q_PROPERTY(bool busy READ busy NOTIFY changed)
+    Q_PROPERTY(QString error READ error NOTIFY changed)
 public:
     QAbstractItemModel *entriesModel() { return &model; }
     QVariantList entries() const { return model.entries(); }
-    bool busy() const { return false; }
-    QString error() const { return QString(); }
+    bool busy() const { return busyValue; }
+    QString error() const { return errorValue; }
+    QString errorValue;
+    bool busyValue = false;
+    int refreshCount = 0;
+    Q_INVOKABLE void refresh() { ++refreshCount; busyValue = true; emit changed(); }
+    void finishRefresh() { busyValue = false; emit changed(); }
     Q_INVOKABLE void open(const QString &, const QString &) {}
     Q_INVOKABLE void close() {}
     CollaborationEntriesModel model;
@@ -105,10 +114,11 @@ public:
     QString createdName;
     QString actionProject;
     QString actionName;
+    int refreshCount = 0;
     Q_INVOKABLE void createProject(const QString &name) { createdName = name; }
     Q_INVOKABLE void changeProjectTrash(const QString &project, const QString &action)
     { actionProject = project; actionName = action; }
-    Q_INVOKABLE void refreshProjects() {}
+    Q_INVOKABLE void refreshProjects() { ++refreshCount; }
     Q_INVOKABLE void openMainProjectSource(const QString &) {}
     Q_INVOKABLE void setCoverEditor(QObject *editor) { coverEditor = editor; }
     QVariantList projects() const
@@ -149,16 +159,22 @@ class FakeFileClient : public QObject
     Q_OBJECT
     Q_PROPERTY(QVariantList projectFiles READ projectFiles CONSTANT)
     Q_PROPERTY(QString server READ server CONSTANT)
-    Q_PROPERTY(QString filesError READ filesError CONSTANT)
+    Q_PROPERTY(QString filesError READ filesError NOTIFY filesErrorChanged)
     Q_PROPERTY(bool filesBusy READ filesBusy NOTIFY filesBusyChanged)
     Q_PROPERTY(bool sourceBusy MEMBER sourceBusy NOTIFY sourceBusyChanged)
+    Q_PROPERTY(bool offline MEMBER offline NOTIFY offlineChanged)
     Q_PROPERTY(QString sourceError MEMBER sourceError NOTIFY sourceErrorChanged)
 public:
     QVariantList projectFiles() const { return files; }
     QString server() const { return QStringLiteral("https://example.org"); }
     QVariantList files;
-    QString filesError() const { return QString(); }
-    bool filesBusy() const { return false; }
+    QString filesError() const { return filesErrorValue; }
+    QString filesErrorValue;
+    bool filesBusy() const { return filesBusyValue; }
+    bool filesBusyValue = false;
+    bool asyncLoad = false;
+    bool offline = false;
+    int loadCount = 0;
     bool sourceBusy = false;
     QString sourceError;
     QString openedPath;
@@ -168,7 +184,17 @@ public:
     QList<QUrl> uploads;
     QString overwriteId;
     QString overwriteType;
-    Q_INVOKABLE void loadProjectFiles(const QString &) {}
+    Q_INVOKABLE void loadProjectFiles(const QString &)
+    {
+        ++loadCount;
+        if (asyncLoad) {
+            filesBusyValue = false;
+            emit filesBusyChanged();
+            filesBusyValue = true;
+            emit filesBusyChanged();
+        }
+    }
+    void finishFileLoad() { filesBusyValue = false; emit filesBusyChanged(); }
     Q_INVOKABLE void closeProjectFiles() {}
     Q_INVOKABLE void loadProjectFileTree(const QString &) {}
     Q_INVOKABLE void openProjectFileExternally(const QString &project, const QString &path)
@@ -183,6 +209,7 @@ public:
                                            const QString &id, const QString &type)
     { operation = QStringLiteral("overwrite"); operationPath = path; uploads.append(url); overwriteId = id; overwriteType = type; }
 signals:
+    void offlineChanged();
     void sourceBusyChanged();
     void sourceErrorChanged();
     void sourceSaved(const QString &path, const QString &text);
@@ -267,7 +294,8 @@ public:
     QUrl callback;
     Q_INVOKABLE void requestEdit(const QString &instruction, const QString &source)
     { prompt = instruction; context = source; }
-    Q_INVOKABLE void cancel() {}
+    int cancellations = 0;
+    Q_INVOKABLE void cancel() { ++cancellations; busy = false; emit changed(); }
     Q_INVOKABLE bool handleAuthorizationUrl(const QUrl &url)
     { callback = url; return url.path() == QStringLiteral("/abedul-openrouter"); }
 signals:
@@ -524,6 +552,9 @@ public:
     int sourceCloses = 0;
     int mainOpens = 0;
     int pdfCloses = 0;
+    int syncLine = 0;
+    int syncColumn = 0;
+    QString syncFile;
     QString openedPath;
     QString root;
     void setPdfPath(const QString &path) { m_path = path; emit pdfPathChanged(); }
@@ -537,6 +568,8 @@ public:
     Q_INVOKABLE void openMainProjectSource(const QString &) { ++mainOpens; }
     Q_INVOKABLE void saveProjectSource(const QString &, const QString &, const QString &, bool, const QString &) { ++saves; }
     Q_INVOKABLE void compileProjectPdf(const QString &, const QString &path) { ++compiles; root = path; }
+    Q_INVOKABLE void syncSourceToPdf(const QString &, const QString &path, int line, int column)
+    { syncFile = path; syncLine = line; syncColumn = column; }
 signals:
     void offlineChanged();
     void errorChanged();
@@ -610,36 +643,6 @@ private:
     bool m_loading = false;
 };
 
-class FakePulley : public QObject
-{
-    Q_OBJECT
-    Q_PROPERTY(bool active MEMBER active)
-    Q_PROPERTY(bool enabled MEMBER enabled)
-    Q_PROPERTY(qreal height MEMBER height)
-public:
-    bool active = false;
-    bool enabled = true;
-    qreal height = 100;
-    Q_INVOKABLE void close() { active = false; }
-};
-
-class FakeFlickable : public QObject
-{
-    Q_OBJECT
-    Q_PROPERTY(QObject *pullDownMenu MEMBER menu)
-    Q_PROPERTY(qreal originY MEMBER originY)
-    Q_PROPERTY(qreal contentY MEMBER contentY)
-    Q_PROPERTY(qreal contentHeight MEMBER contentHeight)
-    Q_PROPERTY(qreal height MEMBER height)
-public:
-    QObject *menu = nullptr;
-    qreal originY = 0;
-    qreal contentY = 0;
-    qreal contentHeight = 800;
-    qreal height = 800;
-    Q_INVOKABLE void cancelFlick() {}
-};
-
 class AutoLoginTests : public QObject
 {
     Q_OBJECT
@@ -650,6 +653,7 @@ private slots:
     void automaticLoginOnlyAfterSuccessfulProjectLoad();
     void interfaceComponentsLoad();
     void aiGenerationSupportsLandscapeAndPreview();
+    void sciHubAddressAndSearch();
     void aiLoginLandscapeAndCallback();
     void aiModeControlsSettingsAndEditor();
     void pagesAndPickersAllowLandscape();
@@ -663,15 +667,19 @@ private slots:
     void uploadsMultipleFiles();
     void updatesEditorAfterFileOperations();
     void editorPersistsDraft();
+    void editorRedoShortcut();
+    void editorAndPdfWheelAfterEditing();
     void completesLatexCommands();
     void completionTabHint();
     void findsAndReplacesText();
     void editorScrollsLongDocuments();
     void projectViewFiltersArchived();
     void offlineEditorDoesNotUseLegacyDraft();
-    void createsProjectFromMenu();
+    void createsProjectFromToolbar();
     void managesProjectTrash();
     void opensCollaborationPage();
+    void pullRefreshPages();
+    void historyNavigatesToCurrentFile();
     void historyListUpdatesVisibleEntries();
     void pdfPaneLoadsDocument();
     void pdfPaneReplacesRenderedPage();
@@ -689,7 +697,11 @@ private slots:
     void reconnectsInBackground();
     void removesServerCookies();
     void showsServerSelectionWhenRestoreUnavailable();
-    void editorPulleyWheelIsLimitedToHeader();
+    void editorAppBarActions();
+    void editorAppBarMouseClicks();
+    void editorSettingsMouseClick();
+    void portraitAppBarNavigation();
+    void pdfAppBarMouseClick();
     void mouseButtonsFollowNavigationRules();
     void editorSettingsAndZoom();
     void portraitPdfNavigation();
@@ -707,6 +719,8 @@ void AutoLoginTests::initTestCase()
     qmlRegisterType<DoubleTapMonitor>("Abedul", 1, 0, "DoubleTapMonitor");
     qmlRegisterType<CompletionKeyFilter>("Abedul", 1, 0, "CompletionKeyFilter");
     qmlRegisterType<OpenRouterClient>("Abedul", 1, 0, "OpenRouterClient");
+    qmlRegisterType<WolframAlphaClient>("Abedul", 1, 0, "WolframAlphaClient");
+    qmlRegisterType<ReversoClient>("Abedul", 1, 0, "ReversoClient");
 }
 
 void AutoLoginTests::doubleTapRespectsClipping()
@@ -830,7 +844,7 @@ void AutoLoginTests::interfaceComponentsLoad()
                                QStringLiteral("CoverPage.qml"), QStringLiteral("OpenCachedPdf.qml"),
                                QStringLiteral("LoginPage.qml"), QStringLiteral("SettingsPage.qml"),
                                QStringLiteral("ProjectFilesPage.qml"), QStringLiteral("ProjectCollaborationPage.qml"),
-                               QStringLiteral("CompileRootPage.qml"), QStringLiteral("AiAssistantPage.qml"),
+                               QStringLiteral("CompileRootPage.qml"), QStringLiteral("AiAssistantPopup.qml"),
                                QStringLiteral("OpenRouterLoginPage.qml")};
     for (const QString &page : pages) {
         QQmlComponent component(&engine, autoLoginUrl.resolved(QUrl(page)));
@@ -854,12 +868,17 @@ void AutoLoginTests::aiGenerationSupportsLandscapeAndPreview()
     component.setData(R"(
         import QtQuick 2.0
         import "." as Pages
-        Pages.AiAssistantPage { client: fakeAi; editorPage: fakeEditor }
+        Item {
+            width: 1024; height: 600
+            Pages.AiAssistantPopup { client: fakeAi; editorPage: fakeEditor }
+        }
     )", base.resolved(QUrl(QStringLiteral("AiPageTest.qml"))));
     QScopedPointer<QObject> object(component.create());
     QVERIFY2(object, qPrintable(component.errorString()));
-    QQuickItem *page = qobject_cast<QQuickItem *>(object.data());
-    QVERIFY(page);
+    QQuickItem *host = qobject_cast<QQuickItem *>(object.data());
+    QQuickItem *page = object->findChild<QQuickItem *>(QStringLiteral("aiGeneratorPopup"));
+    QVERIFY(host && page);
+    QVERIFY(QMetaObject::invokeMethod(page, "open"));
     auto *prompt = page->findChild<QQuickItem *>(QStringLiteral("aiPrompt"));
     auto *generate = page->findChild<QQuickItem *>(QStringLiteral("aiGenerate"));
     auto *preview = page->findChild<QQuickItem *>(QStringLiteral("aiGeneratedText"));
@@ -868,10 +887,12 @@ void AutoLoginTests::aiGenerationSupportsLandscapeAndPreview()
     auto *scroll = page->findChild<QQuickItem *>(QStringLiteral("aiGeneratorFlickable"));
     QVERIFY(prompt && generate && original && preview && insert && scroll);
     for (const QSizeF size : {QSizeF(1024, 600), QSizeF(600, 1024)}) {
-        page->setSize(size);
-        QTRY_COMPARE(scroll->width(), size.width());
-        QTRY_COMPARE(prompt->width(), size.width());
-        QVERIFY(generate->width() <= size.width());
+        host->setSize(size);
+        QCoreApplication::processEvents();
+        QVERIFY(page->width() <= size.width() && page->height() <= size.height());
+        QVERIFY(scroll->width() <= page->width());
+        QTRY_COMPARE(prompt->width(), scroll->width());
+        QVERIFY(generate->width() <= scroll->width());
     }
     prompt->setProperty("text", QStringLiteral("Make a table"));
     void *mouseEvent = nullptr;
@@ -883,11 +904,12 @@ void AutoLoginTests::aiGenerationSupportsLandscapeAndPreview()
     QTRY_COMPARE(original->property("text").toString(), QStringLiteral("selection"));
     QTRY_COMPARE(preview->property("text").toString(), QStringLiteral("\\begin{tabular}{c}"));
     for (const QSizeF size : {QSizeF(1024, 600), QSizeF(600, 1024)}) {
-        page->setSize(size);
-        QTRY_COMPARE(scroll->width(), size.width());
-        QVERIFY(original->x() >= 0 && original->x() + original->width() <= size.width());
-        QVERIFY(preview->x() >= 0 && preview->x() + preview->width() <= size.width());
-        QVERIFY(insert->width() <= size.width());
+        host->setSize(size);
+        QCoreApplication::processEvents();
+        QVERIFY(page->width() <= size.width() && page->height() <= size.height());
+        QVERIFY(original->x() >= 0 && original->x() + original->width() <= scroll->width());
+        QVERIFY(preview->x() >= 0 && preview->x() + preview->width() <= scroll->width());
+        QVERIFY(insert->width() <= scroll->width());
     }
     QVERIFY(editor.inserted.isEmpty());
     editor.text.append(QStringLiteral(" changed"));
@@ -900,9 +922,12 @@ void AutoLoginTests::aiGenerationSupportsLandscapeAndPreview()
     QCOMPARE(editor.inserted, QStringLiteral("\\begin{tabular}{c}"));
     QCOMPARE(editor.start, 7);
     QCOMPARE(editor.end, 16);
-    QCOMPARE(stack.pops, 1);
+    QCOMPARE(stack.pops, 0);
+    QVERIFY(!page->isVisible());
 
     editor.text = QStringLiteral("same text and same text");
+    QVERIFY(QMetaObject::invokeMethod(page, "open"));
+    prompt->setProperty("text", QStringLiteral("Make a table"));
     QVERIFY(QMetaObject::invokeMethod(generate, "clicked", QGenericArgument("QQuickMouseEvent*", &mouseEvent)));
     emit provider.resultReady(QStringLiteral("{\"action\":\"replace\",\"old_text\":\"same\",\"new_text\":\"other\"}"));
     QVERIFY(!page->property("proposalReady").toBool());
@@ -922,6 +947,8 @@ void AutoLoginTests::aiGenerationSupportsLandscapeAndPreview()
     QCOMPARE(editor.end, 16);
     QVERIFY(editor.inserted.isEmpty());
 
+    QVERIFY(QMetaObject::invokeMethod(page, "open"));
+    prompt->setProperty("text", QStringLiteral("Make a table"));
     QVERIFY(QMetaObject::invokeMethod(generate, "clicked", QGenericArgument("QQuickMouseEvent*", &mouseEvent)));
     emit provider.resultReady(QStringLiteral("{\"action\":\"insert\",\"new_text\":\"new code\"}"));
     QVERIFY(page->property("proposalReady").toBool());
@@ -929,11 +956,40 @@ void AutoLoginTests::aiGenerationSupportsLandscapeAndPreview()
     QCOMPARE(editor.start, 2);
     QCOMPARE(editor.end, 2);
     QCOMPARE(editor.inserted, QStringLiteral("new code"));
+    QVERIFY(QMetaObject::invokeMethod(page, "open"));
+    prompt->setProperty("text", QStringLiteral("Another request"));
+    provider.busy = true;
+    emit provider.changed();
+    QVERIFY(QMetaObject::invokeMethod(page, "close"));
+    QCOMPARE(provider.cancellations, 1);
+    emit provider.resultReady(QStringLiteral("{\"action\":\"insert\",\"new_text\":\"late\"}"));
+    QVERIFY(QMetaObject::invokeMethod(page, "open"));
+    QVERIFY(prompt->property("text").toString().isEmpty());
+    QVERIFY(!page->property("proposalReady").toBool());
+}
+
+void AutoLoginTests::sciHubAddressAndSearch()
+{
+    IsolatedAiSettings settings;
+    OverleafClient client;
+    QCOMPARE(client.sciHubAddress(), QStringLiteral("https://sci-hub.ru"));
+    QVERIFY(client.setSciHubAddress(QStringLiteral("https://example.test/mirror/")));
+    QCOMPARE(client.sciHubAddress(), QStringLiteral("https://example.test/mirror"));
+    QCOMPARE(client.sciHubSearchUrl(QStringLiteral("10.1234/abc?x=1")).toEncoded(),
+             QByteArray("https://example.test/mirror/10.1234%2Fabc%3Fx%3D1"));
+    QVERIFY(!client.setSciHubAddress(QStringLiteral("http://example.test")));
+    QVERIFY(!client.setSciHubAddress(QStringLiteral("https://user@example.test")));
+    QVERIFY(!client.setSciHubAddress(QStringLiteral("https://example.test/?x=1")));
+    QCOMPARE(client.sciHubAddress(), QStringLiteral("https://example.test/mirror"));
+    QVERIFY(client.sciHubSearchUrl(QStringLiteral("  ")).isEmpty());
+    OverleafClient restored;
+    QCOMPARE(restored.sciHubAddress(), client.sciHubAddress());
 }
 
 void AutoLoginTests::aiModeControlsSettingsAndEditor()
 {
     IsolatedAiSettings settings;
+    IsolatedAiData isolatedData;
     QTemporaryDir directory;
     DraftStore drafts(directory.path());
     FakePdfClient client;
@@ -958,12 +1014,12 @@ void AutoLoginTests::aiModeControlsSettingsAndEditor()
     editorPage->setProperty("visible", true);
     QObject *editor = editorPage->findChild<QObject *>(QStringLiteral("draftEditor"));
     QObject *shortcut = editorPage->findChild<QObject *>(QStringLiteral("aiGeneratorShortcut"));
-    QObject *menu = editorPage->findChild<QObject *>(QStringLiteral("editorAiAssistant"));
-    QObject *header = editorPage->findChild<QObject *>(QStringLiteral("editorHeader"));
-    QVERIFY(editor && shortcut && menu && header);
-    QObject *pulley = header->property("pullDownMenu").value<QObject *>();
-    QVERIFY(pulley);
-    pulley->setProperty("active", true);
+    QObject *aiButton = editorPage->findChild<QObject *>(QStringLiteral("editorAiAssistant"));
+    QObject *appBar = editorPage->findChild<QObject *>(QStringLiteral("editorAppBar"));
+    QVERIFY(editor && shortcut && aiButton && appBar);
+    QObject *aiIcon = aiButton->property("icon").value<QObject *>();
+    QVERIFY(aiIcon);
+    QTRY_COMPARE(aiIcon->property("status").toInt(), 1);
     editorPage->setProperty("currentFile", QStringLiteral("/main.tex"));
     editorPage->setProperty("initialized", true);
     editor->setProperty("text", QStringLiteral("\\beg"));
@@ -973,12 +1029,21 @@ void AutoLoginTests::aiModeControlsSettingsAndEditor()
     QCOMPARE(editorPage->property("latexCompletion").toString(), QStringLiteral("in{}"));
     QVERIFY(!editorPage->property("aiEnabled").toBool());
     QVERIFY(!shortcut->property("enabled").toBool());
-    QVERIFY(!menu->property("visible").toBool());
+    QVERIFY(!aiButton->property("visible").toBool());
 
     QQmlComponent settingsComponent(&engine, base.resolved(QUrl(QStringLiteral("SettingsPage.qml"))));
     QScopedPointer<QObject> settingsPage(settingsComponent.create());
     QVERIFY2(settingsPage, qPrintable(settingsComponent.errorString()));
     settingsPage->setProperty("visible", true);
+    QObject *appIdField = settingsPage->findChild<QObject *>(QStringLiteral("wolframAlphaAppIdSetting"));
+    WolframAlphaClient *wolfram = editorPage->findChild<WolframAlphaClient *>(QStringLiteral("editorWolframAlphaClient"));
+    QVERIFY(appIdField && wolfram);
+    QObject *appIdInput = appIdField->property("_editor").value<QObject *>();
+    QVERIFY(appIdInput);
+    appIdField->setProperty("text", QStringLiteral("TEST-APP-ID"));
+    QVERIFY(QMetaObject::invokeMethod(appIdInput, "editingFinished"));
+    wolfram->reload();
+    QCOMPARE(wolfram->appId(), QStringLiteral("TEST-APP-ID"));
     QObject *toggle = settingsPage->findChild<QObject *>(QStringLiteral("aiEnabledSetting"));
     QObject *signIn = settingsPage->findChild<QObject *>(QStringLiteral("aiSignIn"));
     OpenRouterClient *settingsClient = settingsPage->findChild<OpenRouterClient *>(QStringLiteral("settingsAiClient"));
@@ -1004,8 +1069,7 @@ void AutoLoginTests::aiModeControlsSettingsAndEditor()
     container->setProperty("status", container->property("activeStatus"));
     QVERIFY(editorPage->property("aiEnabled").toBool());
     QVERIFY(shortcut->property("enabled").toBool());
-    pulley->setProperty("active", true);
-    QVERIFY(menu->property("visible").toBool());
+    QVERIFY(editorPage->property("aiEnabled").toBool());
     QCOMPARE(editorPage->property("latexCompletion").toString(), QStringLiteral("in{}"));
 
     container->setProperty("status", container->property("inactiveStatus"));
@@ -1016,7 +1080,7 @@ void AutoLoginTests::aiModeControlsSettingsAndEditor()
     container->setProperty("status", container->property("activeStatus"));
     QVERIFY(!editorPage->property("aiEnabled").toBool());
     QVERIFY(!shortcut->property("enabled").toBool());
-    QVERIFY(!menu->property("visible").toBool());
+    QVERIFY(!editorPage->property("aiEnabled").toBool());
     QCOMPARE(editorPage->property("latexCompletion").toString(), QStringLiteral("in{}"));
 }
 
@@ -1129,9 +1193,16 @@ void AutoLoginTests::russianTranslations()
         QQmlComponent component(&engine, base.resolved(QUrl(QStringLiteral("EditorPage.qml"))));
         QScopedPointer<QObject> page(component.create());
         QVERIFY2(page, qPrintable(component.errorString()));
-        QObject *save = page->findChild<QObject *>(QStringLiteral("saveAndCompile"));
-        QVERIFY(save);
-        QCOMPARE(save->property("text").toString(), QString::fromUtf8("Сохранить и скомпилировать"));
+        QObject *compile = page->findChild<QObject *>(QStringLiteral("saveAndCompile"));
+        QVERIFY(compile);
+        QCOMPARE(compile->property("text").toString(), QString::fromUtf8("Компилировать"));
+        QObject *files = page->findChild<QObject *>(QStringLiteral("editorProjectFiles"));
+        QObject *access = page->findChild<QObject *>(QStringLiteral("projectSharing"));
+        QObject *ai = page->findChild<QObject *>(QStringLiteral("editorAiAssistant"));
+        QVERIFY(files && access && ai);
+        QCOMPARE(files->property("text").toString(), QString::fromUtf8("Файлы"));
+        QCOMPARE(access->property("text").toString(), QString::fromUtf8("Доступ"));
+        QCOMPARE(ai->property("text").toString(), QString());
         QByteArray payload;
         QString error;
         QVERIFY(!compileRequestBody(QString(), &payload, &error));
@@ -1480,53 +1551,56 @@ void AutoLoginTests::editorPersistsDraft()
     pageItem->setSize(QSizeF(600, 800));
     QObject *editor = page->findChild<QObject *>(QStringLiteral("draftEditor"));
     QVERIFY(editor);
-    QObject *header = page->findChild<QObject *>(QStringLiteral("editorHeader"));
+    QObject *content = page->findChild<QObject *>(QStringLiteral("editorContent"));
+    QQuickItem *appBar = page->findChild<QQuickItem *>(QStringLiteral("editorAppBar"));
     QObject *codePane = page->findChild<QObject *>(QStringLiteral("editorCodePane"));
     QObject *pdfLoader = page->findChild<QObject *>(QStringLiteral("pdfLoader"));
-    QObject *headerBackground = page->findChild<QObject *>(QStringLiteral("editorHeaderBackground"));
-    QObject *projectName = page->findChild<QObject *>(QStringLiteral("editorProjectName"));
     QQuickItem *settings = page->findChild<QQuickItem *>(QStringLiteral("editorSettings"));
     QQuickItem *openPdf = page->findChild<QQuickItem *>(QStringLiteral("openCachedPdf"));
     QQuickItem *downloadZip = page->findChild<QQuickItem *>(QStringLiteral("downloadProjectArchive"));
     QQuickItem *projectFiles = page->findChild<QQuickItem *>(QStringLiteral("editorProjectFiles"));
     QObject *saveMenuItem = page->findChild<QObject *>(QStringLiteral("saveAndCompile"));
-    QVERIFY(header);
+    QVERIFY(content);
+    QVERIFY(appBar);
     QVERIFY(codePane);
     QVERIFY(pdfLoader);
-    QVERIFY(headerBackground);
-    QVERIFY(projectName);
+    QVERIFY(!page->findChild<QObject *>(QStringLiteral("editorPulleyWheel")));
     QVERIFY(page->findChild<QObject *>(QStringLiteral("projectSharing")));
     QVERIFY(page->findChild<QObject *>(QStringLiteral("projectHistory")));
-    QVERIFY(page->findChild<QObject *>(QStringLiteral("projectComments")));
+    QObject *comments = page->findChild<QObject *>(QStringLiteral("projectComments"));
+    QVERIFY(comments);
+    QObject *commentsIcon = comments->property("icon").value<QObject *>();
+    QVERIFY(commentsIcon);
+    QVERIFY(commentsIcon->property("source").toUrl().toString().endsWith(QStringLiteral("/icons/comments.png")));
+    QTRY_COMPARE(commentsIcon->property("status").toInt(), 1);
     QVERIFY(page->findChild<QObject *>(QStringLiteral("projectChat")));
     QVERIFY(settings);
     QVERIFY(openPdf);
     QVERIFY(downloadZip);
     QVERIFY(projectFiles);
     QVERIFY(saveMenuItem);
-    QCOMPARE(qobject_cast<QQuickItem *>(projectName)->parentItem(),
-             qobject_cast<QQuickItem *>(saveMenuItem)->parentItem());
     const QList<QQuickItem *> menuItems = settings->parentItem()->childItems();
     const QList<QQuickItem *> expectedOrder = {
-        qobject_cast<QQuickItem *>(projectName), settings, openPdf, downloadZip,
-        projectFiles, qobject_cast<QQuickItem *>(saveMenuItem)
+        qobject_cast<QQuickItem *>(saveMenuItem), projectFiles, downloadZip, openPdf,
+        page->findChild<QQuickItem *>(QStringLiteral("editorSearch")),
+        page->findChild<QQuickItem *>(QStringLiteral("projectChat")),
+        page->findChild<QQuickItem *>(QStringLiteral("projectHistory")),
+        page->findChild<QQuickItem *>(QStringLiteral("projectSharing")),
+        page->findChild<QQuickItem *>(QStringLiteral("projectComments")),
+        page->findChild<QQuickItem *>(QStringLiteral("editorAiAssistant")), settings
     };
     for (int i = 0; i + 1 < expectedOrder.size(); ++i) {
         const int position = menuItems.indexOf(expectedOrder.at(i));
         QVERIFY(position >= 0);
         QVERIFY(position < menuItems.indexOf(expectedOrder.at(i + 1)));
     }
-    QCOMPARE(projectName->property("text").toString(), QStringLiteral("Test"));
+    QCOMPARE(appBar->property("headerText").toString(), QStringLiteral("Test"));
     page->setProperty("projectName", QStringLiteral("Renamed"));
-    QCOMPARE(projectName->property("text").toString(), QStringLiteral("Renamed"));
-    QCOMPARE(headerBackground->property("color").value<QColor>().alpha(), 255);
-    const QColor headerColor = headerBackground->property("color").value<QColor>();
-    QVERIFY(headerColor == QColor(Qt::black) || headerColor == QColor(Qt::white));
+    QCOMPARE(appBar->property("headerText").toString(), QStringLiteral("Renamed"));
     QVERIFY(codePane->property("clip").toBool());
     QVERIFY(pdfLoader->property("clip").toBool());
-    QVERIFY(header->property("height").toReal() > 0);
-    QVERIFY(header->property("pullDownMenu").value<QObject *>());
-    QVERIFY(!codePane->property("pullDownMenu").value<QObject *>());
+    QVERIFY(content->property("height").toReal() > 0);
+    QVERIFY(appBar->height() > 0);
     QQuickItem *panes = page->findChild<QQuickItem *>(QStringLiteral("editorPanes"));
     QQuickItem *pdfPane = page->findChild<QQuickItem *>(QStringLiteral("editorPdfPane"));
     QQuickItem *compileButton = page->findChild<QQuickItem *>(QStringLiteral("pdfCompileButton"));
@@ -1538,10 +1612,8 @@ void AutoLoginTests::editorPersistsDraft()
     QCOMPARE(compileButton->x() + compileButton->width() / 2, pdfPane->width() / 2);
     QCOMPARE(compileButton->y() + compileButton->height() / 2, pdfPane->height() / 2);
     QCOMPARE(qobject_cast<QQuickItem *>(codePane)->parentItem(), panes);
-    const qreal originalY = panes->mapToItem(pageItem, QPointF()).y();
-    header->setProperty("contentY", -80);
-    QCOMPARE(panes->mapToItem(pageItem, QPointF()).y(), originalY + 80);
-    header->setProperty("contentY", 0);
+    QCOMPARE(panes->mapToItem(pageItem, QPointF()).y(),
+             appBar->mapToItem(pageItem, QPointF(0, appBar->height())).y());
     QVERIFY(page->property("initialized").toBool());
     editor->setProperty("text", QStringLiteral("\\section{Test}"));
     QTRY_VERIFY(!page->property("dirty").toBool());
@@ -1549,8 +1621,176 @@ void AutoLoginTests::editorPersistsDraft()
     QCOMPARE(drafts.text(), QStringLiteral("\\section{Test}"));
 }
 
+void AutoLoginTests::editorRedoShortcut()
+{
+    QTemporaryDir directory;
+    DraftStore drafts(directory.path());
+    FakePdfClient client;
+    QQmlEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("overleafClient"), &client);
+    engine.rootContext()->setContextProperty(QStringLiteral("draftStore"), &drafts);
+    const QUrl base = QUrl::fromLocalFile(QStringLiteral(AUTO_LOGIN_QML_PATH));
+    QQmlComponent component(&engine, base.resolved(QUrl(QStringLiteral("EditorPage.qml"))));
+    QQmlComponent containerComponent(&engine);
+    containerComponent.setData(
+        "import QtQuick 2.5\nimport Sailfish.Silica 1.0\n"
+        "Item { property int status: PageStatus.Active; property int navigation: 0; "
+        "property int navigationPending: 0; property int direction: 0 }", QUrl());
+    QScopedPointer<QObject> container(containerComponent.create());
+    QVERIFY(container);
+    QQuickRenderControl renderControl;
+    QQuickWindow window(&renderControl);
+    window.resize(600, 800);
+    QScopedPointer<QObject> page(component.beginCreate(engine.rootContext()));
+    QVERIFY2(page, qPrintable(component.errorString()));
+    page->setProperty("__stack_container", QVariant::fromValue(qobject_cast<QQuickItem *>(container.data())));
+    component.completeCreate();
+    QQuickItem *pageItem = qobject_cast<QQuickItem *>(page.data());
+    QVERIFY(pageItem);
+    pageItem->setParentItem(window.contentItem());
+    pageItem->setSize(QSizeF(600, 800));
+    pageItem->setVisible(true);
+    page->setProperty("initialized", true);
+    QObject *editor = page->findChild<QObject *>(QStringLiteral("draftEditor"));
+    QObject *redo = page->findChild<QObject *>(QStringLiteral("editorRedoShortcut"));
+    QVERIFY(editor && redo);
+    QQuickItem *input = qobject_cast<QQuickItem *>(editor->property("_editor").value<QObject *>());
+    QVERIFY(input);
+    window.show();
+    window.requestActivate();
+    input->forceActiveFocus();
+    QTRY_VERIFY(input->hasActiveFocus());
+    editor->setProperty("text", QStringLiteral("abc"));
+    input->setProperty("cursorPosition", 3);
+    QTest::keyClick(&window, Qt::Key_D);
+    QCOMPARE(input->property("text").toString(), QStringLiteral("abcd"));
+    QTest::keyClick(&window, Qt::Key_Z, Qt::ControlModifier);
+    QCOMPARE(input->property("text").toString(), QStringLiteral("abc"));
+    QTest::keyClick(&window, Qt::Key_Y, Qt::ControlModifier);
+    QCOMPARE(input->property("text").toString(), QStringLiteral("abcd"));
+
+    QTest::keyClick(&window, Qt::Key_Z, Qt::ControlModifier);
+    QCOMPARE(input->property("text").toString(), QStringLiteral("abc"));
+    page->setProperty("searchVisible", true);
+    QObject *search = page->findChild<QObject *>(QStringLiteral("searchInput"));
+    QVERIFY(search);
+    QQuickItem *searchInput = qobject_cast<QQuickItem *>(search->property("_editor").value<QObject *>());
+    QVERIFY(searchInput);
+    searchInput->forceActiveFocus();
+    QTRY_VERIFY(searchInput->hasActiveFocus());
+    QVERIFY(!redo->property("enabled").toBool());
+    QTest::keyClick(&window, Qt::Key_Y, Qt::ControlModifier);
+    QCOMPARE(input->property("text").toString(), QStringLiteral("abc"));
+    input->forceActiveFocus();
+    QTRY_VERIFY(input->hasActiveFocus());
+    QTest::keyClick(&window, Qt::Key_Y, Qt::ControlModifier);
+    QCOMPARE(input->property("text").toString(), QStringLiteral("abcd"));
+}
+
+void AutoLoginTests::editorAndPdfWheelAfterEditing()
+{
+    QTemporaryDir directory;
+    DraftStore drafts(directory.path());
+    FakePdfClient client;
+    const QString pdfPath = QDir(directory.path()).filePath(QStringLiteral("wheel.pdf"));
+    {
+        QPdfWriter writer(pdfPath);
+        QPainter painter(&writer);
+        QVERIFY(painter.isActive());
+        for (int i = 0; i < 4; ++i) {
+            painter.drawText(100, 100, QStringLiteral("PDF page"));
+            if (i < 3)
+                QVERIFY(writer.newPage());
+        }
+    }
+    QQmlEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("overleafClient"), &client);
+    engine.rootContext()->setContextProperty(QStringLiteral("draftStore"), &drafts);
+    const QUrl base = QUrl::fromLocalFile(QStringLiteral(AUTO_LOGIN_QML_PATH));
+    QQmlComponent component(&engine, base.resolved(QUrl(QStringLiteral("EditorPage.qml"))));
+    QQmlComponent containerComponent(&engine);
+    containerComponent.setData(
+        "import QtQuick 2.5\nimport Sailfish.Silica 1.0\n"
+        "Item { property int status: PageStatus.Active; property int navigation: 0; "
+        "property int navigationPending: 0; property int direction: 0 }", QUrl());
+    QScopedPointer<QObject> container(containerComponent.create());
+    QVERIFY(container);
+    QQuickRenderControl renderControl;
+    QQuickWindow window(&renderControl);
+    window.resize(1000, 600);
+    QScopedPointer<QObject> page(component.beginCreate(engine.rootContext()));
+    QVERIFY2(page, qPrintable(component.errorString()));
+    page->setProperty("__stack_container", QVariant::fromValue(qobject_cast<QQuickItem *>(container.data())));
+    component.completeCreate();
+    QQuickItem *pageItem = qobject_cast<QQuickItem *>(page.data());
+    QVERIFY(pageItem);
+    pageItem->setParentItem(window.contentItem());
+    pageItem->setSize(QSizeF(1000, 600));
+    pageItem->setVisible(true);
+    page->setProperty("largeScreen", true);
+    page->setProperty("initialized", true);
+    QQuickItem *pane = page->findChild<QQuickItem *>(QStringLiteral("editorCodePane"));
+    QQuickItem *pdfPane = page->findChild<QQuickItem *>(QStringLiteral("editorPdfPane"));
+    QObject *editor = page->findChild<QObject *>(QStringLiteral("draftEditor"));
+    QObject *loader = page->findChild<QObject *>(QStringLiteral("pdfLoader"));
+    QVERIFY(pane && pdfPane && editor && loader);
+    editor->setProperty("text", QStringLiteral("Editor line\n").repeated(100));
+    client.setPdfPath(pdfPath);
+    QObject *pdf = loader->property("item").value<QObject *>();
+    QVERIFY(pdf);
+    QTRY_COMPARE(pdf->property("status").toInt(), 2);
+    QQuickItem *pdfFlick = pdf->findChild<QQuickItem *>(QStringLiteral("pdfContentFlickable"));
+    QVERIFY(pdfFlick);
+    QQuickItem *input = qobject_cast<QQuickItem *>(editor->property("_editor").value<QObject *>());
+    QVERIFY(input);
+    window.show();
+    window.requestActivate();
+    input->forceActiveFocus();
+    QTRY_VERIFY(input->hasActiveFocus());
+    input->setProperty("cursorPosition", 0);
+    QTest::keyClick(&window, Qt::Key_A);
+    QVERIFY(input->property("text").toString().startsWith(QLatin1Char('a')));
+    renderControl.polishItems();
+    QVERIFY(pane->property("contentHeight").toReal() > pane->height());
+    QTRY_VERIFY(pdfFlick->property("contentHeight").toReal() > pdfFlick->height());
+    for (bool pdfOnLeft : {false, true}) {
+        client.pdfOnLeft = pdfOnLeft;
+        emit client.pdfOnLeftChanged();
+        renderControl.polishItems();
+        pane->setProperty("contentY", 0);
+        pdf->setProperty("contentY", 0);
+        const QPointF editorPoint = pane->mapToScene(QPointF(pane->width() / 2, pane->height() / 2));
+        const QPointF pdfPoint = pdfPane->mapToScene(QPointF(pdfPane->width() / 2, pdfPane->height() / 2));
+        QTest::mouseMove(&window, editorPoint.toPoint());
+        QTRY_COMPARE(page->property("wheelTarget").toString(), QStringLiteral("editor"));
+        QWheelEvent editorWheel(editorPoint, -120, Qt::NoButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(&window, &editorWheel);
+        QVERIFY(pane->property("contentY").toReal() > 0);
+        const qreal editorY = pane->property("contentY").toReal();
+        QTest::mouseMove(&window, pdfPoint.toPoint());
+        QTRY_COMPARE(page->property("wheelTarget").toString(), QStringLiteral("pdf"));
+        QWheelEvent pdfWheel(editorPoint, -120, Qt::NoButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(&window, &pdfWheel);
+        QTRY_VERIFY(pdf->property("contentY").toReal() > 0);
+        QCOMPARE(pane->property("contentY").toReal(), editorY);
+        QVERIFY(input->hasActiveFocus());
+        const qreal pdfZoom = pdf->property("zoom").toReal();
+        QWheelEvent pdfZoomWheel(pdfPoint, 120, Qt::NoButton, Qt::ControlModifier);
+        QCoreApplication::sendEvent(&window, &pdfZoomWheel);
+        QVERIFY(pdf->property("zoom").toReal() > pdfZoom);
+        const qreal pdfY = pdf->property("contentY").toReal();
+        QTest::mouseMove(&window, editorPoint.toPoint());
+        QTRY_COMPARE(page->property("wheelTarget").toString(), QStringLiteral("editor"));
+        QWheelEvent editorWheelAgain(pdfPoint, -120, Qt::NoButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(&window, &editorWheelAgain);
+        QVERIFY(pane->property("contentY").toReal() > editorY);
+        QCOMPARE(pdf->property("contentY").toReal(), pdfY);
+    }
+}
+
 void AutoLoginTests::completesLatexCommands()
 {
+    IsolatedAiData isolatedData;
     QTemporaryDir directory;
     DraftStore drafts(directory.path());
     FakePdfClient client;
@@ -1689,6 +1929,181 @@ void AutoLoginTests::completesLatexCommands()
     editor->setProperty("text", QStringLiteral("ordinary"));
     input->setProperty("cursorPosition", 8);
     QVERIFY(!shortcut->property("enabled").toBool());
+
+    QQmlComponent containerComponent(view.engine());
+    containerComponent.setData(
+        "import QtQuick 2.5\n"
+        "import Sailfish.Silica 1.0\n"
+        "Item { property int status: PageStatus.Active; property int activeStatus: PageStatus.Active; "
+        "property int inactiveStatus: PageStatus.Inactive; property int navigation: 0; "
+        "property int navigationPending: 0; property int direction: 0 }", QUrl());
+    QScopedPointer<QObject> container(containerComponent.create());
+    QVERIFY2(container, qPrintable(containerComponent.errorString()));
+    page->setProperty("__stack_container", QVariant::fromValue(qobject_cast<QQuickItem *>(container.data())));
+    QObject *wolframShortcut = page->findChild<QObject *>(QStringLiteral("wolframAlphaShortcut"));
+    QQuickItem *wolframPopup = page->findChild<QQuickItem *>(QStringLiteral("wolframAlphaPopup"));
+    QObject *wolframText = page->findChild<QObject *>(QStringLiteral("wolframAlphaPopupText"));
+    QQuickItem *codePane = page->findChild<QQuickItem *>(QStringLiteral("editorCodePane"));
+    QVERIFY(wolframShortcut && wolframPopup && wolframText && codePane);
+    QCOMPARE(wolframShortcut->property("portableText").toString(), QStringLiteral("Ctrl+W"));
+    QVERIFY(page->property("keyboardShortcutHintText").toString().contains(QStringLiteral("Ctrl+W")));
+    input->forceActiveFocus();
+    QVERIFY(wolframShortcut->property("enabled").toBool());
+    QVERIFY(QMetaObject::invokeMethod(wolframShortcut, "activated"));
+    QVERIFY(!wolframPopup->isVisible());
+    editor->setProperty("text", QStringLiteral("$x=1$"));
+    input->setProperty("cursorPosition", 2);
+    QVERIFY(!wolframPopup->isVisible());
+    QVERIFY(QMetaObject::invokeMethod(wolframShortcut, "activated"));
+    QCOMPARE(wolframText->property("text").toString(), QStringLiteral("Add your WolframAlpha AppID in Settings first."));
+    for (const QSize &size : {QSize(600, 800), QSize(1024, 600)}) {
+        view.resize(size);
+        QCoreApplication::processEvents();
+        QVERIFY(wolframPopup->width() <= codePane->width());
+        QVERIFY(wolframPopup->height() <= codePane->height());
+        QVERIFY(wolframPopup->x() >= codePane->x());
+        QVERIFY(wolframPopup->x() + wolframPopup->width() <= codePane->x() + codePane->width());
+        QVERIFY(wolframPopup->y() >= codePane->y());
+        QVERIFY(wolframPopup->y() + wolframPopup->height() <= codePane->y() + codePane->height());
+    }
+    QObject *wolframButton = page->findChild<QObject *>(QStringLiteral("editorWolframAlpha"));
+    QObject *wolframIcon = page->findChild<QObject *>(QStringLiteral("editorWolframAlphaIcon"));
+    QQuickItem *inputPopup = page->findChild<QQuickItem *>(QStringLiteral("wolframAlphaInputPopup"));
+    QObject *formula = page->findChild<QObject *>(QStringLiteral("wolframAlphaInput"));
+    QObject *formulaResult = page->findChild<QObject *>(QStringLiteral("wolframAlphaInputResult"));
+    QObject *submit = page->findChild<QObject *>(QStringLiteral("wolframAlphaSubmit"));
+    QVERIFY(wolframButton && wolframIcon && inputPopup && formula && formulaResult && submit);
+    QVERIFY(!page->findChild<QObject *>(QStringLiteral("wolframAlphaInputClose")));
+    QVERIFY(!page->findChild<QObject *>(QStringLiteral("wolframAlphaClose")));
+    QTRY_COMPARE(wolframIcon->property("status").toInt(), 1);
+    const QString iconSource = wolframIcon->property("source").toUrl().toString();
+    QVERIFY(iconSource.endsWith(QStringLiteral("rheniumbeta-dark.png"))
+            || iconSource.endsWith(QStringLiteral("rheniumbeta-light.png")));
+    for (const QString &name : {QStringLiteral("rheniumbeta-dark.png"),
+                                QStringLiteral("rheniumbeta-light.png")}) {
+        const QImage icon(base.resolved(QUrl(QStringLiteral("../icons/") + name)).toLocalFile());
+        QVERIFY(!icon.isNull());
+        QCOMPARE(qAlpha(icon.pixel(0, 0)), 0);
+        QVERIFY(qAlpha(icon.pixel(icon.width() / 2, icon.height() / 2)) > 0);
+    }
+    QVERIFY(wolframButton->property("text").toString().isEmpty());
+    void *mouseEvent = nullptr;
+    QVERIFY(QMetaObject::invokeMethod(wolframButton, "clicked",
+                                      QGenericArgument("QQuickMouseEvent*", &mouseEvent)));
+    QVERIFY(inputPopup->isVisible());
+    QVERIFY(!wolframPopup->isVisible());
+    QVERIFY(!page->property("wolframInputSubmitted").toBool());
+    formula->setProperty("text", QStringLiteral("x^2=1"));
+    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QCoreApplication::sendEvent(formula, &enter);
+    QVERIFY(page->property("wolframInputSubmitted").toBool());
+    QCOMPARE(formulaResult->property("text").toString(),
+             QStringLiteral("Add your WolframAlpha AppID in Settings first."));
+    for (const QSize &size : {QSize(600, 800), QSize(1024, 600)}) {
+        view.resize(size);
+        QCoreApplication::processEvents();
+        QQuickItem *parent = inputPopup->parentItem();
+        QVERIFY(inputPopup->width() <= parent->width());
+        QVERIFY(inputPopup->height() <= parent->height());
+        QVERIFY(inputPopup->x() >= 0);
+        QVERIFY(inputPopup->x() + inputPopup->width() <= parent->width());
+        QVERIFY(inputPopup->y() >= 0);
+        QVERIFY(inputPopup->y() + inputPopup->height() <= parent->height());
+    }
+    QVERIFY(QMetaObject::invokeMethod(page, "dismissUtilityPopups"));
+    QVERIFY(!inputPopup->isVisible());
+
+    QObject *reversoButton = page->findChild<QObject *>(QStringLiteral("editorReverso"));
+    QObject *reversoShortcut = page->findChild<QObject *>(QStringLiteral("reversoShortcut"));
+    QQuickItem *reversoPopup = page->findChild<QQuickItem *>(QStringLiteral("reversoPopup"));
+    QObject *reversoInput = page->findChild<QObject *>(QStringLiteral("reversoInput"));
+    QObject *reversoResult = page->findChild<QObject *>(QStringLiteral("reversoResult"));
+    QQuickItem *reversoInputContainer = page->findChild<QQuickItem *>(QStringLiteral("reversoInputContainer"));
+    QQuickItem *reversoSubmit = page->findChild<QQuickItem *>(QStringLiteral("reversoSubmit"));
+    QVERIFY(reversoButton && reversoShortcut && reversoPopup && reversoInput && reversoResult
+            && reversoInputContainer && reversoSubmit);
+    QObject *reversoIcon = page->findChild<QObject *>(QStringLiteral("editorReversoIcon"));
+    QVERIFY(reversoIcon);
+    QTRY_COMPARE(reversoIcon->property("status").toInt(), 1);
+    QVERIFY(page->property("keyboardShortcutHintText").toString().contains(QStringLiteral("Ctrl+R")));
+    QCOMPARE(reversoShortcut->property("portableText").toString(), QStringLiteral("Ctrl+R"));
+    QVERIFY(QMetaObject::invokeMethod(reversoButton, "clicked",
+                                      QGenericArgument("QQuickMouseEvent*", &mouseEvent)));
+    QVERIFY(reversoPopup->isVisible());
+    QVERIFY(reversoInputContainer->isVisible());
+    QVERIFY(reversoSubmit->isVisible());
+    QVERIFY(!inputPopup->isVisible());
+    QVERIFY(!reversoShortcut->property("enabled").toBool());
+    for (const QSize &size : {QSize(600, 800), QSize(1024, 600)}) {
+        view.resize(size);
+        QCoreApplication::processEvents();
+        QQuickItem *parent = reversoPopup->parentItem();
+        QVERIFY(reversoPopup->width() <= parent->width());
+        QVERIFY(reversoPopup->height() <= parent->height());
+        QVERIFY(reversoPopup->x() >= 0);
+        QVERIFY(reversoPopup->x() + reversoPopup->width() <= parent->width());
+        QVERIFY(reversoPopup->y() >= 0);
+        QVERIFY(reversoPopup->y() + reversoPopup->height() <= parent->height());
+    }
+    QVERIFY(QMetaObject::invokeMethod(reversoPopup, "close"));
+    const QString selection = QStringLiteral("first line\n") + QString(1001, QLatin1Char('a'));
+    editor->setProperty("text", selection + QStringLiteral(" trailing"));
+    QVERIFY(QMetaObject::invokeMethod(input, "select", Q_ARG(int, 0), Q_ARG(int, selection.size())));
+    input->forceActiveFocus();
+    QVERIFY(reversoShortcut->property("enabled").toBool());
+    QVERIFY(QMetaObject::invokeMethod(reversoShortcut, "activated"));
+    QVERIFY(reversoPopup->isVisible());
+    QVERIFY(reversoPopup->property("reverseDirection").toBool());
+    QVERIFY(!reversoInputContainer->isVisible());
+    QVERIFY(!reversoSubmit->isVisible());
+    QCOMPARE(reversoPopup->property("translatedWord").toString(), selection);
+    QVERIFY(reversoResult->property("text").toString().contains(QStringLiteral("too long")));
+    for (const QSize &size : {QSize(600, 800), QSize(1024, 600)}) {
+        view.resize(size);
+        QCoreApplication::processEvents();
+        const QPointF origin = codePane->mapToItem(reversoPopup->parentItem(), QPointF());
+        const QRectF cursor = input->property("cursorRectangle").toRectF();
+        const QPointF cursorPoint = input->mapToItem(codePane, cursor.topLeft());
+        const qreal cursorTop = qBound(qreal(0), cursorPoint.y(), codePane->height());
+        const qreal cursorBottom = qBound(qreal(0), cursorPoint.y() + cursor.height(), codePane->height());
+        QVERIFY(reversoPopup->x() >= origin.x() - 0.1);
+        QVERIFY(reversoPopup->x() + reversoPopup->width() <= origin.x() + codePane->width() + 0.1);
+        QVERIFY(reversoPopup->y() >= origin.y() - 0.1);
+        QVERIFY(reversoPopup->y() + reversoPopup->height() <= origin.y() + codePane->height() + 0.1);
+        QVERIFY(qAbs(reversoPopup->y() - (origin.y() + cursorBottom)) < 1
+                || qAbs(reversoPopup->y() + reversoPopup->height() - (origin.y() + cursorTop)) < 1);
+    }
+    editor->setProperty("text", QStringLiteral("changed"));
+    QVERIFY(!reversoPopup->isVisible());
+    editor->setProperty("text", QStringLiteral("ordinary $x^2$ tail"));
+    input->setProperty("cursorPosition", 11);
+    QVERIFY(QMetaObject::invokeMethod(reversoShortcut, "activated"));
+    QVERIFY(!reversoPopup->isVisible());
+    QVERIFY(QMetaObject::invokeMethod(input, "select", Q_ARG(int, 0), Q_ARG(int, 14)));
+    QVERIFY(QMetaObject::invokeMethod(reversoShortcut, "activated"));
+    QVERIFY(!reversoPopup->isVisible());
+    editor->setProperty("text", QStringLiteral("ordinary words"));
+    input->setProperty("cursorPosition", 3);
+    input->forceActiveFocus();
+    QObject *sourceLanguage = page->findChild<QObject *>(QStringLiteral("reversoSourceLanguage"));
+    QObject *targetLanguage = page->findChild<QObject *>(QStringLiteral("reversoTargetLanguage"));
+    QVERIFY(sourceLanguage && targetLanguage);
+    targetLanguage->setProperty("currentIndex", sourceLanguage->property("currentIndex"));
+    QVERIFY(QMetaObject::invokeMethod(reversoShortcut, "activated"));
+    QVERIFY(reversoPopup->isVisible());
+    QCOMPARE(reversoPopup->property("translatedWord").toString(), QStringLiteral("ordinary"));
+    QVERIFY(!reversoInputContainer->isVisible());
+    QVERIFY(QMetaObject::invokeMethod(reversoPopup, "close"));
+    QVERIFY(QMetaObject::invokeMethod(reversoButton, "clicked",
+                                      QGenericArgument("QQuickMouseEvent*", &mouseEvent)));
+    QVERIFY(reversoPopup->isVisible());
+    QVERIFY(reversoInputContainer->isVisible());
+    QVERIFY(reversoSubmit->isVisible());
+    container->setProperty("status", container->property("inactiveStatus"));
+    QVERIFY(!wolframShortcut->property("enabled").toBool());
+    QVERIFY(!wolframPopup->isVisible());
+    QVERIFY(!reversoShortcut->property("enabled").toBool());
+    QVERIFY(!reversoPopup->isVisible());
 }
 
 void AutoLoginTests::completionTabHint()
@@ -1784,7 +2199,9 @@ void AutoLoginTests::findsAndReplacesText()
     QVERIFY(QMetaObject::invokeMethod(shortcut, "activated"));
     QVERIFY(page->property("searchVisible").toBool());
     page->setProperty("searchVisible", false);
-    QVERIFY(QMetaObject::invokeMethod(menu, "clicked"));
+    void *mouseEvent = nullptr;
+    QVERIFY(QMetaObject::invokeMethod(menu, "clicked",
+                                      QGenericArgument("QQuickMouseEvent*", &mouseEvent)));
     QVERIFY(page->property("searchVisible").toBool());
     QQuickItem *input = qobject_cast<QQuickItem *>(editor->property("_editor").value<QObject *>());
     QVERIFY(input);
@@ -1792,7 +2209,6 @@ void AutoLoginTests::findsAndReplacesText()
     input->setProperty("cursorPosition", 0);
     search->setProperty("text", QStringLiteral("one"));
     replacement->setProperty("text", QStringLiteral("x"));
-    void *mouseEvent = nullptr;
     QVERIFY(QMetaObject::invokeMethod(next, "clicked", QGenericArgument("QQuickMouseEvent*", &mouseEvent)));
     QCOMPARE(input->property("selectionStart").toInt(), 0);
     QVERIFY(QMetaObject::invokeMethod(next, "clicked", QGenericArgument("QQuickMouseEvent*", &mouseEvent)));
@@ -2017,8 +2433,13 @@ void AutoLoginTests::editorScrollsLongDocuments()
     emit client.offlineChanged();
     const int pushes = stack.pushes;
     QTest::keyClick(&window, Qt::Key_I, Qt::ControlModifier | Qt::ShiftModifier);
-    QTRY_COMPARE(stack.pushes, pushes + 1);
-    QVERIFY(stack.lastUrl.toString().endsWith(QStringLiteral("AiAssistantPage.qml")));
+    QQuickItem *generatorPopup = page->findChild<QQuickItem *>(QStringLiteral("aiGeneratorPopup"));
+    QVERIFY(generatorPopup);
+    QTRY_VERIFY(generatorPopup->isVisible());
+    QCOMPARE(stack.pushes, pushes);
+    QVERIFY(QMetaObject::invokeMethod(generatorPopup, "close"));
+    QTest::qWait(20);
+    textInput->forceActiveFocus();
     editor->setProperty("text", QStringLiteral("Line of text\n").repeated(100) + QStringLiteral("needle\nneedle"));
     const int cursor = textInput->property("text").toString().length();
     textInput->setProperty("cursorPosition", cursor);
@@ -2085,6 +2506,7 @@ void AutoLoginTests::editorScrollsLongDocuments()
     QVERIFY(popup->isVisible());
     QCOMPARE(popupText->property("text").toString(), page->property("aiCompletionError").toString());
 
+    QCoreApplication::processEvents();
     QTest::keyClick(&window, Qt::Key_I, Qt::ControlModifier);
     QVERIFY(aiClient->busy());
     QTRY_VERIFY(!aiClient->busy());
@@ -2095,15 +2517,17 @@ void AutoLoginTests::editorScrollsLongDocuments()
     QCOMPARE(popupText->property("text").toString(), aiClient->error());
     const int errorChatPushes = stack.pushes;
     QTest::keyClick(&window, Qt::Key_I, Qt::ControlModifier | Qt::ShiftModifier);
-    QTRY_COMPARE(stack.pushes, errorChatPushes + 1);
+    QTRY_VERIFY(generatorPopup->isVisible());
+    QCOMPARE(stack.pushes, errorChatPushes);
     OpenRouterClient *generatorClient = page->findChild<OpenRouterClient *>(QStringLiteral("aiGeneratorClient"));
     QVERIFY(generatorClient);
     QVERIFY(generatorClient != aiClient);
-    QCOMPARE(stack.pushProperties.value(QStringLiteral("client")).value<QObject *>(),
-             static_cast<QObject *>(generatorClient));
+    QCOMPARE(generatorPopup->property("client").value<QObject *>(), static_cast<QObject *>(generatorClient));
     QVERIFY(generatorClient->authenticated());
     QVERIFY(generatorClient->error().isEmpty());
     QVERIFY(!aiClient->error().isEmpty());
+    QVERIFY(QMetaObject::invokeMethod(generatorPopup, "close"));
+    textInput->forceActiveFocus();
     aiClient->signOut();
     QVERIFY(!aiClient->authenticated());
     for (int attempt = 0; attempt < 2; ++attempt) {
@@ -2180,18 +2604,9 @@ void AutoLoginTests::editorScrollsLongDocuments()
     QWheelEvent wheel(point, -120, Qt::NoButton, Qt::NoModifier);
     QCoreApplication::sendEvent(&window, &wheel);
     QVERIFY(pane->property("contentY").toReal() > 0);
-    QObject *header = page->findChild<QObject *>(QStringLiteral("editorHeader"));
-    QVERIFY(header);
-    QObject *menu = header->property("pullDownMenu").value<QObject *>();
-    QVERIFY(menu);
-    QVERIFY(!menu->property("active").toBool());
-    QWheelEvent menuOpen(QPointF(300, 5), 120, Qt::NoButton, Qt::NoModifier);
-    QCoreApplication::sendEvent(&window, &menuOpen);
-    QVERIFY(menu->property("active").toBool());
-    QVERIFY(header->property("contentY").toReal() < header->property("originY").toReal());
-    QWheelEvent menuClose(QPointF(300, 5), -120, Qt::NoButton, Qt::NoModifier);
-    QCoreApplication::sendEvent(&window, &menuClose);
-    QTRY_VERIFY(!menu->property("active").toBool());
+    QQuickItem *appBar = page->findChild<QQuickItem *>(QStringLiteral("editorAppBar"));
+    QVERIFY(appBar);
+    QVERIFY(!page->findChild<QObject *>(QStringLiteral("editorPulleyWheel")));
     QWheelEvent wheelUp(point, 120, Qt::NoButton, Qt::NoModifier);
     QCoreApplication::sendEvent(&window, &wheelUp);
     QCOMPARE(pane->property("contentY").toReal(), 0.0);
@@ -2365,31 +2780,71 @@ void AutoLoginTests::projectViewFiltersArchived()
     QVERIFY(!page->property("backNavigation").toBool());
     QObject *list = page->findChild<QObject *>(QStringLiteral("projectList"));
     QObject *loading = page->findChild<QObject *>(QStringLiteral("projectsLoading"));
-    QObject *refresh = page->findChild<QObject *>(QStringLiteral("refreshProjects"));
+    QObject *create = page->findChild<QObject *>(QStringLiteral("createProject"));
+    QObject *archive = page->findChild<QObject *>(QStringLiteral("showArchived"));
+    QObject *trash = page->findChild<QObject *>(QStringLiteral("showTrash"));
+    QObject *server = page->findChild<QObject *>(QStringLiteral("changeServer"));
+    QObject *settings = page->findChild<QObject *>(QStringLiteral("projectSettings"));
+    QQuickItem *pageItem = qobject_cast<QQuickItem *>(page.data());
+    QQuickItem *appBar = page->findChild<QQuickItem *>(QStringLiteral("projectsAppBar"));
+    QQuickItem *listItem = qobject_cast<QQuickItem *>(list);
     QVERIFY(list);
+    QVERIFY(pageItem && appBar && listItem);
     QVERIFY(loading);
-    QVERIFY(refresh);
-    QVERIFY(refresh->property("enabled").toBool());
+    QVERIFY(!page->findChild<QObject *>(QStringLiteral("refreshProjects")));
+    QVERIFY(!page->findChild<QObject *>(QStringLiteral("projectsRefreshSpacer")));
+    QVERIFY(create && archive && trash && server && settings);
+    const QList<QQuickItem *> actionOrder = {
+        qobject_cast<QQuickItem *>(create), qobject_cast<QQuickItem *>(archive),
+        qobject_cast<QQuickItem *>(trash), qobject_cast<QQuickItem *>(server),
+        qobject_cast<QQuickItem *>(settings)
+    };
+    const QList<QQuickItem *> appBarItems = actionOrder.first()->parentItem()->childItems();
+    for (int i = 0; i + 1 < actionOrder.size(); ++i) {
+        const int position = appBarItems.indexOf(actionOrder.at(i));
+        QVERIFY(position >= 0);
+        QVERIFY(position < appBarItems.indexOf(actionOrder.at(i + 1)));
+    }
+    QCOMPARE(create->property("text").toString(), QStringLiteral("New project"));
+    QCOMPARE(archive->property("text").toString(), QStringLiteral("Archive"));
+    QCOMPARE(trash->property("text").toString(), QStringLiteral("Trash"));
+    QCOMPARE(server->property("text").toString(), QStringLiteral("Server"));
+    QCOMPARE(settings->property("text").toString(), QStringLiteral("Settings"));
+    for (const QSize &size : {QSize(600, 800), QSize(800, 600)}) {
+        pageItem->setSize(size);
+        QTRY_COMPARE(pageItem->width(), qreal(size.width()));
+        QCOMPARE(appBar->width(), pageItem->width());
+        QVERIFY(qAbs(listItem->y() - (appBar->y() + appBar->height())) < 1.0);
+        QVERIFY(qAbs(listItem->height() + listItem->y() - pageItem->height()) < 1.0);
+    }
     QVERIFY(!loading->property("enabled").toBool());
+    QVERIFY(QMetaObject::invokeMethod(page.data(), "refreshProjectsFromPull"));
+    QCOMPARE(client.refreshCount, 1);
+    QVERIFY(page->property("pullRefreshPending").toBool());
     client.projectsCached = false;
     client.setBusy(true);
-    QVERIFY(!refresh->property("enabled").toBool());
+    QVERIFY(page->property("pullRefreshPending").toBool());
     QVERIFY(loading->property("enabled").toBool());
     QCOMPARE(loading->property("text").toString(), QStringLiteral("Loading projects…"));
     client.setBusy(false);
+    QTRY_VERIFY(!page->property("pullRefreshPending").toBool());
     QVERIFY(!loading->property("enabled").toBool());
     QCOMPARE(list->property("count").toInt(), 1);
     const QVariantList active = list->property("model").toList();
     QCOMPARE(active.at(0).toMap().value(QStringLiteral("name")).toString(), QStringLiteral("Active"));
     page->setProperty("showArchived", true);
+    QCOMPARE(archive->property("text").toString(), QStringLiteral("Projects"));
+    QVERIFY(!create->property("visible").toBool());
     QCOMPARE(list->property("count").toInt(), 1);
     const QVariantList archived = list->property("model").toList();
     QCOMPARE(archived.at(0).toMap().value(QStringLiteral("name")).toString(), QStringLiteral("Archived"));
     page->setProperty("showTrash", true);
+    QVERIFY(!archive->property("visible").toBool());
+    QCOMPARE(trash->property("text").toString(), QStringLiteral("Projects"));
     QCOMPARE(list->property("count").toInt(), 2);
 }
 
-void AutoLoginTests::createsProjectFromMenu()
+void AutoLoginTests::createsProjectFromToolbar()
 {
     FakeProjectClient client;
     FakePageStack stack;
@@ -2406,7 +2861,9 @@ void AutoLoginTests::createsProjectFromMenu()
     QObject *action = page->findChild<QObject *>(QStringLiteral("createProject"));
     QVERIFY(action);
     QVERIFY(action->property("enabled").toBool());
-    QVERIFY(QMetaObject::invokeMethod(page.data(), "openCreateProjectDialog"));
+    void *mouseEvent = nullptr;
+    QVERIFY(QMetaObject::invokeMethod(action, "clicked",
+                                      QGenericArgument("QQuickMouseEvent*", &mouseEvent)));
     QQmlComponent *dialogComponent = qobject_cast<QQmlComponent *>(stack.pushedComponent);
     QVERIFY(dialogComponent);
     QScopedPointer<QObject> dialog(dialogComponent->create());
@@ -2483,6 +2940,116 @@ void AutoLoginTests::opensCollaborationPage()
     QObject *collaboration = client.collaboration();
     QVERIFY(collaboration);
     QVERIFY(!collaboration->property("error").toString().isEmpty());
+}
+
+void AutoLoginTests::pullRefreshPages()
+{
+    FakeFileClient client;
+    FakeFileEditor editor;
+    QQmlEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("overleafClient"), &client);
+    const QUrl base = QUrl::fromLocalFile(QStringLiteral(AUTO_LOGIN_QML_PATH));
+    for (const QString &file : {QStringLiteral("ProjectFilesPage.qml"), QStringLiteral("CompileRootPage.qml")}) {
+        QQmlComponent component(&engine, base.resolved(QUrl(file)));
+        QScopedPointer<QObject> page(component.beginCreate(engine.rootContext()));
+        QVERIFY2(page, qPrintable(component.errorString()));
+        page->setProperty("projectId", QStringLiteral("project"));
+        page->setProperty("editorPage", QVariant::fromValue(static_cast<QObject *>(&editor)));
+        component.completeCreate();
+        const int initialLoads = client.loadCount;
+        client.asyncLoad = true;
+        QVERIFY(QMetaObject::invokeMethod(page.data(), "refreshFromPull"));
+        QCOMPARE(client.loadCount, initialLoads + 1);
+        QVERIFY(page->property("pullRefreshPending").toBool());
+        QVERIFY(QMetaObject::invokeMethod(page.data(), "refreshFromPull"));
+        QCOMPARE(client.loadCount, initialLoads + 1);
+        client.filesErrorValue = QStringLiteral("network error");
+        emit client.filesErrorChanged();
+        client.finishFileLoad();
+        QTRY_VERIFY(!page->property("pullRefreshPending").toBool());
+        client.filesErrorValue.clear();
+        emit client.filesErrorChanged();
+        client.asyncLoad = false;
+        QVERIFY(QMetaObject::invokeMethod(page.data(), "refreshFromPull"));
+        QTRY_VERIFY(!page->property("pullRefreshPending").toBool());
+        QCOMPARE(client.loadCount, initialLoads + 2);
+        if (file == QStringLiteral("ProjectFilesPage.qml")) {
+            client.offline = true;
+            emit client.offlineChanged();
+            QVERIFY(QMetaObject::invokeMethod(page.data(), "refreshFromPull"));
+            QCOMPARE(client.loadCount, initialLoads + 2);
+            client.offline = false;
+            emit client.offlineChanged();
+            client.sourceBusy = true;
+            emit client.sourceBusyChanged();
+            QVERIFY(QMetaObject::invokeMethod(page.data(), "refreshFromPull"));
+            QCOMPARE(client.loadCount, initialLoads + 2);
+            client.sourceBusy = false;
+            emit client.sourceBusyChanged();
+        }
+    }
+
+    FakeCollaborationHost host;
+    engine.rootContext()->setContextProperty(QStringLiteral("overleafClient"), &host);
+    QQmlComponent component(&engine, base.resolved(QUrl(QStringLiteral("ProjectCollaborationPage.qml"))));
+    QScopedPointer<QObject> page(component.create());
+    QVERIFY2(page, qPrintable(component.errorString()));
+    QVERIFY(QMetaObject::invokeMethod(page.data(), "refreshFromPull"));
+    QCOMPARE(host.client.refreshCount, 1);
+    QVERIFY(page->property("pullRefreshPending").toBool());
+    QVERIFY(QMetaObject::invokeMethod(page.data(), "refreshFromPull"));
+    QCOMPARE(host.client.refreshCount, 1);
+    host.client.errorValue = QStringLiteral("network error");
+    host.client.finishRefresh();
+    QTRY_VERIFY(!page->property("pullRefreshPending").toBool());
+}
+
+void AutoLoginTests::historyNavigatesToCurrentFile()
+{
+    QTemporaryDir directory;
+    DraftStore drafts(directory.path());
+    FakePdfClient client;
+    QQmlEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("overleafClient"), &client);
+    engine.rootContext()->setContextProperty(QStringLiteral("draftStore"), &drafts);
+    const QUrl base = QUrl::fromLocalFile(QStringLiteral(AUTO_LOGIN_QML_PATH));
+    QQmlComponent component(&engine, base.resolved(QUrl(QStringLiteral("EditorPage.qml"))));
+    QScopedPointer<QObject> page(component.create());
+    QVERIFY2(page, qPrintable(component.errorString()));
+    page->setProperty("visible", true);
+    page->setProperty("projectId", QStringLiteral("project"));
+    page->setProperty("currentFile", QStringLiteral("/main.tex"));
+    page->setProperty("initialized", true);
+    QObject *editor = page->findChild<QObject *>(QStringLiteral("draftEditor"));
+    QVERIFY(editor);
+    const QString text = QStringLiteral("first\nunique passage\nlast");
+    editor->setProperty("text", text);
+    page->setProperty("baseText", text);
+    page->setProperty("baseKnown", true);
+    client.setPdfPath(QStringLiteral("/nonexistent-test.pdf"));
+    QVariant result;
+    const QVariant target = QVariantMap{{QStringLiteral("path"), QStringLiteral("main.tex")},
+                                        {QStringLiteral("text"), QStringLiteral("unique passage")}};
+    QVERIFY(QMetaObject::invokeMethod(page.data(), "openHistoryLocation", Q_RETURN_ARG(QVariant, result),
+                                      Q_ARG(QVariant, target)));
+    QVERIFY(result.toBool());
+    QObject *input = editor->property("_editor").value<QObject *>();
+    QVERIFY(input);
+    QCOMPARE(input->property("cursorPosition").toInt(), 6);
+    QCOMPARE(client.syncFile, QStringLiteral("/main.tex"));
+    QCOMPARE(client.syncLine, 2);
+    QCOMPARE(client.syncColumn, 0);
+    client.syncLine = 0;
+    const QVariant ambiguous = QVariantMap{{QStringLiteral("path"), QStringLiteral("main.tex")},
+                                           {QStringLiteral("text"), QStringLiteral("s")}};
+    QVERIFY(QMetaObject::invokeMethod(page.data(), "openHistoryLocation", Q_RETURN_ARG(QVariant, result),
+                                      Q_ARG(QVariant, ambiguous)));
+    QVERIFY(result.toBool());
+    QCOMPARE(client.syncLine, 0);
+    const QVariant invalid = QVariantMap{{QStringLiteral("path"), QStringLiteral("../escape.tex")}};
+    QVERIFY(QMetaObject::invokeMethod(page.data(), "openHistoryLocation", Q_RETURN_ARG(QVariant, result),
+                                      Q_ARG(QVariant, invalid)));
+    QVERIFY(!result.toBool());
 }
 
 void AutoLoginTests::historyListUpdatesVisibleEntries()
@@ -3568,11 +4135,12 @@ void AutoLoginTests::showsServerSelectionWhenRestoreUnavailable()
     QCOMPARE(stack.pushes, 0);
 }
 
-void AutoLoginTests::editorPulleyWheelIsLimitedToHeader()
+void AutoLoginTests::editorAppBarActions()
 {
     QTemporaryDir directory;
     DraftStore drafts(directory.path());
     FakePdfClient client;
+    client.commentsAvailable = false;
     QQuickView view;
     view.rootContext()->setContextProperty(QStringLiteral("overleafClient"), &client);
     view.rootContext()->setContextProperty(QStringLiteral("draftStore"), &drafts);
@@ -3583,26 +4151,439 @@ void AutoLoginTests::editorPulleyWheelIsLimitedToHeader()
     QVERIFY2(view.status() == QQuickView::Ready, qPrintable(view.errors().isEmpty()
              ? QString() : view.errors().first().toString()));
     QQuickItem *page = view.rootObject();
-    QQuickItem *wheelArea = page->findChild<QQuickItem *>(QStringLiteral("editorPulleyWheel"));
-    QVERIFY(wheelArea);
-    FakePulley menu;
-    FakeFlickable flickable;
-    flickable.menu = &menu;
-    wheelArea->setProperty("flickable", QVariant::fromValue(static_cast<QObject *>(&flickable)));
-    const auto wheel = [wheelArea](qreal delta) {
-        return QMetaObject::invokeMethod(wheelArea, "moveWheel", Q_ARG(QVariant, delta));
+    QQuickItem *appBar = page->findChild<QQuickItem *>(QStringLiteral("editorAppBar"));
+    QQuickItem *appBarScroller = page->findChild<QQuickItem *>(QStringLiteral("editorAppBarScroller"));
+    QQuickItem *content = page->findChild<QQuickItem *>(QStringLiteral("editorContent"));
+    QVERIFY(appBar && appBarScroller);
+    QVERIFY(content);
+    const QStringList actionNames = {
+        QStringLiteral("saveAndCompile"), QStringLiteral("editorProjectFiles"),
+        QStringLiteral("editorMoreActions"), QStringLiteral("downloadProjectArchive"),
+        QStringLiteral("openCachedPdf"),
+        QStringLiteral("editorSearch"), QStringLiteral("projectChat"),
+        QStringLiteral("projectHistory"), QStringLiteral("projectSharing"),
+        QStringLiteral("projectComments"), QStringLiteral("editorAiAssistant"),
+        QStringLiteral("editorKeyboardShortcuts"),
+        QStringLiteral("editorSettings")
     };
-    QVERIFY(wheelArea->height() < 700);
-    QVERIFY(!menu.active);
-    QVERIFY(wheel(30));
-    QVERIFY(menu.active);
-    const qreal first = flickable.contentY;
-    QVERIFY(first < flickable.originY);
-    QVERIFY(wheel(30));
-    QVERIFY(flickable.contentY < first);
-    QVERIFY(wheel(-30));
-    QVERIFY(wheel(-30));
-    QVERIFY(!menu.active);
+    QList<QQuickItem *> actions;
+    for (const QString &name : actionNames) {
+        QQuickItem *action = page->findChild<QQuickItem *>(name);
+        QVERIFY(action);
+        actions.append(action);
+    }
+    QVERIFY(!actions.at(9)->property("enabled").toBool());
+    QQuickItem *shortcutList = page->findChild<QQuickItem *>(QStringLiteral("editorShortcutList"));
+    QVERIFY(shortcutList);
+    const QString shortcutText = shortcutList->property("text").toString();
+    QVERIFY(shortcutText.contains(QStringLiteral("Ctrl+S")));
+    QVERIFY(shortcutText.contains(QStringLiteral("Ctrl+F")));
+    QVERIFY(shortcutText.contains(QStringLiteral("Ctrl++ / Ctrl+-")));
+    QVERIFY(shortcutText.contains(QStringLiteral("Escape")));
+    QQuickItem *moreShortcutList = page->findChild<QQuickItem *>(
+        QStringLiteral("editorMoreShortcutList"));
+    QVERIFY(moreShortcutList);
+    QCOMPARE(moreShortcutList->property("text").toString(), shortcutText);
+    QObject *morePopup = page->findChild<QObject *>(QStringLiteral("editorMorePopup"));
+    QVERIFY(morePopup);
+    for (const QString &name : {
+             QStringLiteral("moreDownloadProjectArchive"), QStringLiteral("moreEditorSearch"),
+             QStringLiteral("moreProjectChat"), QStringLiteral("moreProjectHistory"),
+             QStringLiteral("moreProjectSharing"), QStringLiteral("moreProjectComments"),
+             QStringLiteral("moreKeyboardShortcuts"), QStringLiteral("moreEditorSettings")
+         }) {
+        QVERIFY(page->findChild<QObject *>(name));
+    }
+    QVERIFY(page->findChild<QObject *>(QStringLiteral("moreAiAssistant")));
+    const QList<QQuickItem *> appBarItems = actions.first()->parentItem()->childItems();
+    QQuickItem *reverso = page->findChild<QQuickItem *>(QStringLiteral("editorReverso"));
+    QQuickItem *wolfram = page->findChild<QQuickItem *>(QStringLiteral("editorWolframAlpha"));
+    QVERIFY(reverso && wolfram);
+    QVERIFY(appBarItems.indexOf(reverso) >= 0);
+    QVERIFY(appBarItems.indexOf(reverso) < appBarItems.indexOf(wolfram));
+    QVERIFY(appBarItems.indexOf(wolfram) < appBarItems.indexOf(actions.at(10)));
+    QQuickItem *rightActionsSpacer = page->findChild<QQuickItem *>(
+        QStringLiteral("editorRightActionsSpacer"));
+    QVERIFY(rightActionsSpacer);
+    for (int i = 0; i + 1 < actions.size(); ++i) {
+        const int position = appBarItems.indexOf(actions.at(i));
+        QVERIFY(position >= 0);
+        QVERIFY(position < appBarItems.indexOf(actions.at(i + 1)));
+    }
+    QVERIFY(appBarItems.indexOf(actions.at(2)) < appBarItems.indexOf(rightActionsSpacer));
+    QVERIFY(appBarItems.indexOf(rightActionsSpacer) < appBarItems.indexOf(actions.at(3)));
+    QQuickItem *sciHubPopup = page->findChild<QQuickItem *>(QStringLiteral("sciHubPopup"));
+    QQuickItem *sciHubHat = page->findChild<QQuickItem *>(QStringLiteral("sciHubHat"));
+    QQuickItem *sciHubTitle = page->findChild<QQuickItem *>(QStringLiteral("sciHubTitle"));
+    QQuickItem *sciHubInput = page->findChild<QQuickItem *>(QStringLiteral("sciHubInput"));
+    QQuickItem *sciHubSearch = page->findChild<QQuickItem *>(QStringLiteral("sciHubSearch"));
+    QQuickItem *wolframFrame = page->findChild<QQuickItem *>(QStringLiteral("wolframAlphaInputFrame"));
+    QVERIFY(sciHubPopup && sciHubHat && sciHubTitle && sciHubInput && sciHubSearch && wolframFrame);
+    const qreal popupRadius = wolframFrame->property("radius").toReal();
+    QVERIFY(popupRadius > 0);
+    for (const QString &name : {QStringLiteral("sciHubPopup"), QStringLiteral("reversoPopup"),
+                                QStringLiteral("aiGeneratorPopup"), QStringLiteral("wolframAlphaInputPopup"),
+                                QStringLiteral("wolframAlphaPopup"), QStringLiteral("latexCompletionPopup")}) {
+        QQuickItem *popup = page->findChild<QQuickItem *>(name);
+        QVERIFY(popup);
+        QCOMPARE(popup->property("radius").toReal(), popupRadius);
+    }
+    sciHubPopup->setProperty("visible", true);
+    for (const QSize &size : {QSize(600, 800), QSize(800, 600)}) {
+        view.resize(size);
+        page->setSize(size);
+        QTRY_COMPARE(page->width(), qreal(size.width()));
+        QCOMPARE(appBarScroller->width(), page->width());
+        QVERIFY(qAbs(content->y() - (appBarScroller->y() + appBarScroller->height())) < 1.0);
+        QVERIFY(qAbs(content->height() + content->y() - page->height()) < 1.0);
+        QTRY_COMPARE(sciHubHat->property("status").toInt(), 1);
+        QCOMPARE(sciHubPopup->y(), qreal(0));
+        QCOMPARE(sciHubPopup->y(), page->findChild<QQuickItem *>(
+                     QStringLiteral("wolframAlphaInputPopup"))->y());
+        QVERIFY(sciHubHat->width() > 0 && sciHubHat->height() > 0);
+        const QRectF hatRect(sciHubHat->mapToItem(sciHubPopup, QPointF()),
+                             QSizeF(sciHubHat->width(), sciHubHat->height()));
+        const QFontMetricsF titleMetrics(qvariant_cast<QFont>(sciHubTitle->property("font")));
+        QVERIFY(qAbs(hatRect.x() - sciHubHat->property("baseX").toReal()
+                     - titleMetrics.width(QStringLiteral("Sci"))) < 1.0);
+        QVERIFY(qAbs(hatRect.y() + sciHubHat->height() * 0.62
+                     + titleMetrics.height() / 3) < 1.0);
+        const QRectF titleRect(sciHubTitle->mapToItem(sciHubPopup, QPointF()),
+                               QSizeF(sciHubTitle->width(), sciHubTitle->height()));
+        QVERIFY(hatRect.intersects(titleRect));
+        QCOMPARE(sciHubInput->parentItem(), sciHubSearch->parentItem());
+        QVERIFY(sciHubInput->width() > 0);
+        QVERIFY(sciHubInput->x() + sciHubInput->width() <= sciHubSearch->x());
+        QQuickItem *sciHubText = qobject_cast<QQuickItem *>(sciHubInput->property("_editor").value<QObject *>());
+        QVERIFY(sciHubText);
+        const qreal textCenter = sciHubText->mapToItem(sciHubInput->parentItem(),
+                                                       QPointF(0, sciHubText->height() / 2)).y();
+        QVERIFY(qAbs(textCenter - sciHubSearch->y() - sciHubSearch->height() / 2) < 1.0);
+    }
+    const QStringList labels = {
+        QStringLiteral("Compile"), QStringLiteral("Files"), QStringLiteral("More"),
+        QString(),         QString(), QString(), QString(), QString(), QString(),
+        QString(), QString(), QString(), QString()
+    };
+    for (int i = 0; i < actions.size(); ++i) {
+        QCOMPARE(actions.at(i)->property("text").toString(), labels.at(i));
+        if (!labels.at(i).isEmpty())
+            QCOMPARE(actions.at(i)->property("layoutDirection").toInt(), int(Qt::LeftToRight));
+    }
+    QVERIFY(!page->findChild<QObject *>(QStringLiteral("editorPulleyWheel")));
+    QCOMPARE(appBar->property("headerText").toString(), QString());
+}
+
+void AutoLoginTests::editorAppBarMouseClicks()
+{
+    QTemporaryDir directory;
+    DraftStore drafts(directory.path());
+    FakePdfClient client;
+    QQmlEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("overleafClient"), &client);
+    engine.rootContext()->setContextProperty(QStringLiteral("draftStore"), &drafts);
+    const QUrl base = QUrl::fromLocalFile(QStringLiteral(AUTO_LOGIN_QML_PATH));
+    QQmlComponent component(&engine);
+    component.setData(R"(
+        import QtQuick 2.0
+        import Sailfish.Silica 1.0
+        ApplicationWindow {
+            width: 800; height: 600
+            property var editorPage
+            property var activePage: pageStack.currentPage
+            initialPage: Component { Page {} }
+            function openEditor() {
+                editorPage = pageStack.push(Qt.resolvedUrl("EditorPage.qml"),
+                    { projectId: "test", largeScreen: true }, PageStackAction.Immediate)
+            }
+        }
+    )", base);
+    QQuickRenderControl renderControl;
+    QQuickWindow window(&renderControl);
+    window.resize(800, 600);
+    window.contentItem()->setSize(QSizeF(800, 600));
+    QScopedPointer<QObject> root(component.create());
+    QVERIFY2(root, qPrintable(component.errorString()));
+    QQuickItem *rootItem = qobject_cast<QQuickItem *>(root.data());
+    QVERIFY(rootItem);
+    rootItem->setParentItem(window.contentItem());
+    QVERIFY(QMetaObject::invokeMethod(root.data(), "openEditor"));
+    QObject *page = root->property("editorPage").value<QObject *>();
+    QVERIFY(page);
+    QQuickItem *scroller = page->findChild<QQuickItem *>(QStringLiteral("editorAppBarScroller"));
+    QQuickItem *settings = page->findChild<QQuickItem *>(QStringLiteral("editorSettings"));
+    QQuickItem *reverso = page->findChild<QQuickItem *>(QStringLiteral("editorReverso"));
+    QQuickItem *reversoPopup = page->findChild<QQuickItem *>(QStringLiteral("reversoPopup"));
+    QQuickItem *wolfram = page->findChild<QQuickItem *>(QStringLiteral("editorWolframAlpha"));
+    QQuickItem *wolframPopup = page->findChild<QQuickItem *>(QStringLiteral("wolframAlphaInputPopup"));
+    QQuickItem *sciHub = page->findChild<QQuickItem *>(QStringLiteral("editorSciHub"));
+    QQuickItem *sciHubPopup = page->findChild<QQuickItem *>(QStringLiteral("sciHubPopup"));
+    QQuickItem *sciHubHat = page->findChild<QQuickItem *>(QStringLiteral("sciHubHat"));
+    QQuickItem *aiPopup = page->findChild<QQuickItem *>(QStringLiteral("aiGeneratorPopup"));
+    QQuickItem *wolframResult = page->findChild<QQuickItem *>(QStringLiteral("wolframAlphaPopup"));
+    QQuickItem *content = page->findChild<QQuickItem *>(QStringLiteral("editorContent"));
+    QVERIFY(scroller && settings && reverso && reversoPopup && wolfram && wolframPopup
+            && sciHub && sciHubPopup && sciHubHat && aiPopup && wolframResult && content);
+    for (const QString &name : {QStringLiteral("aiGeneratorClose"), QStringLiteral("reversoClose"),
+                                QStringLiteral("reversoQuickClose"), QStringLiteral("sciHubClose"),
+                                QStringLiteral("wolframAlphaInputClose"), QStringLiteral("wolframAlphaClose")})
+        QVERIFY(!page->findChild<QObject *>(name));
+    QTest::qWait(50);
+    renderControl.polishItems();
+    QVERIFY(page->property("wideTablet").toBool());
+    QVERIFY(settings->isVisible() && settings->isEnabled());
+    QVERIFY(settings->property("text").toString().isEmpty());
+    QVERIFY(scroller->property("contentWidth").toReal() > scroller->width());
+
+    const QPointF top = scroller->mapToScene(QPointF(0, 0));
+    for (int i = 0; i < 4; ++i) {
+        const QPoint start = (top + QPointF(700, scroller->height() / 2)).toPoint();
+        const QPoint end = (top + QPointF(100, scroller->height() / 2)).toPoint();
+        QTest::mousePress(&window, Qt::LeftButton, Qt::NoModifier, start);
+        for (int x = 650; x >= 100; x -= 50)
+            QTest::mouseMove(&window, (top + QPointF(x, scroller->height() / 2)).toPoint(), 10);
+        QTest::mouseRelease(&window, Qt::LeftButton, Qt::NoModifier, end);
+        QTest::qWait(50);
+    }
+    QVERIFY(scroller->property("contentX").toReal() > 0);
+    QVERIFY(QMetaObject::invokeMethod(scroller, "cancelFlick"));
+    renderControl.polishItems();
+    const QPoint reversoPoint = reverso->mapToScene(
+        QPointF(reverso->width() / 2, reverso->height() / 2)).toPoint();
+    QVERIFY(QRect(QPoint(0, 0), window.size()).contains(reversoPoint));
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, reversoPoint);
+    QVERIFY(reversoPopup->isVisible());
+    renderControl.polishItems();
+    QQuickItem *swap = page->findChild<QQuickItem *>(QStringLiteral("reversoSwapLanguages"));
+    QObject *sourceLanguage = page->findChild<QObject *>(QStringLiteral("reversoSourceLanguage"));
+    QObject *targetLanguage = page->findChild<QObject *>(QStringLiteral("reversoTargetLanguage"));
+    QVERIFY(swap && sourceLanguage && targetLanguage);
+    const QPoint swapPoint = swap->mapToScene(QPointF(swap->width() / 2, swap->height() / 2)).toPoint();
+    QVERIFY(QRect(QPoint(0, 0), window.size()).contains(swapPoint));
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, swapPoint);
+    QCOMPARE(sourceLanguage->property("languageCode").toString(), QStringLiteral("en"));
+    QCOMPARE(targetLanguage->property("languageCode").toString(), QStringLiteral("ru"));
+    const QPoint outsidePoint = scroller->mapToScene(QPointF(5, scroller->height() / 2)).toPoint();
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, outsidePoint);
+    QVERIFY(!reversoPopup->isVisible());
+    const QPoint wolframPoint = wolfram->mapToScene(
+        QPointF(wolfram->width() / 2, wolfram->height() / 2)).toPoint();
+    QVERIFY(QRect(QPoint(0, 0), window.size()).contains(wolframPoint));
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, wolframPoint);
+    QVERIFY(wolframPopup->isVisible());
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, outsidePoint);
+    QVERIFY(!wolframPopup->isVisible());
+    const QPoint sciHubPoint = sciHub->mapToScene(
+        QPointF(sciHub->width() / 2, sciHub->height() / 2)).toPoint();
+    QVERIFY(QRect(QPoint(0, 0), window.size()).contains(sciHubPoint));
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, sciHubPoint);
+    QVERIFY(sciHubPopup->isVisible());
+    QVERIFY(sciHubHat->isVisible());
+    const QPoint insidePoint = sciHubPopup->mapToScene(QPointF(sciHubPopup->width() - 10, 10)).toPoint();
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, insidePoint);
+    QVERIFY(sciHubPopup->isVisible());
+    const QPoint contentOutside = content->mapToScene(QPointF(5, content->height() - 5)).toPoint();
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, contentOutside);
+    QVERIFY(!sciHubPopup->isVisible());
+    aiPopup->setProperty("showing", true);
+    QVERIFY(aiPopup->isVisible());
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, outsidePoint);
+    QVERIFY(!aiPopup->isVisible());
+    page->setProperty("wolframVisible", true);
+    QVERIFY(wolframResult->isVisible());
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, outsidePoint);
+    QVERIFY(!wolframResult->isVisible());
+    window.show();
+    window.requestActivate();
+    QVERIFY(QMetaObject::invokeMethod(page, "openWolframInput"));
+    QVERIFY(wolframPopup->isVisible());
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QVERIFY(!wolframPopup->isVisible());
+    QVERIFY(QMetaObject::invokeMethod(page, "openReverso"));
+    QVERIFY(reversoPopup->isVisible());
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QVERIFY(!reversoPopup->isVisible());
+    sciHubPopup->setProperty("visible", true);
+    QVERIFY(sciHubPopup->isVisible());
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QVERIFY(!sciHubPopup->isVisible());
+    aiPopup->setProperty("showing", true);
+    QVERIFY(aiPopup->isVisible());
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QVERIFY(!aiPopup->isVisible());
+}
+
+void AutoLoginTests::editorSettingsMouseClick()
+{
+    QTemporaryDir directory;
+    DraftStore drafts(directory.path());
+    FakePdfClient client;
+    QQmlEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("overleafClient"), &client);
+    engine.rootContext()->setContextProperty(QStringLiteral("draftStore"), &drafts);
+    const QUrl base = QUrl::fromLocalFile(QStringLiteral(AUTO_LOGIN_QML_PATH));
+    QQmlComponent component(&engine);
+    component.setData(R"(
+        import QtQuick 2.0
+        import Sailfish.Silica 1.0
+        ApplicationWindow {
+            width: 800; height: 600
+            property var editorPage
+            property var activePage: pageStack.currentPage
+            initialPage: Component { Page {} }
+            function openEditor() {
+                editorPage = pageStack.push(Qt.resolvedUrl("EditorPage.qml"),
+                    { projectId: "test", largeScreen: true }, PageStackAction.Immediate)
+            }
+        }
+    )", base);
+    QQuickRenderControl renderControl;
+    QQuickWindow window(&renderControl);
+    window.resize(800, 600);
+    window.contentItem()->setSize(QSizeF(800, 600));
+    QScopedPointer<QObject> root(component.create());
+    QVERIFY2(root, qPrintable(component.errorString()));
+    QQuickItem *rootItem = qobject_cast<QQuickItem *>(root.data());
+    QVERIFY(rootItem);
+    rootItem->setParentItem(window.contentItem());
+    QVERIFY(QMetaObject::invokeMethod(root.data(), "openEditor"));
+    QObject *page = root->property("editorPage").value<QObject *>();
+    QVERIFY(page);
+    QQuickItem *scroller = page->findChild<QQuickItem *>(QStringLiteral("editorAppBarScroller"));
+    QQuickItem *settings = page->findChild<QQuickItem *>(QStringLiteral("editorSettings"));
+    QVERIFY(scroller && settings);
+    QTest::qWait(50);
+    scroller->setProperty("contentX", scroller->property("contentWidth").toReal() - scroller->width());
+    renderControl.polishItems();
+    const QPoint point = settings->mapToScene(QPointF(settings->width() / 2, settings->height() / 2)).toPoint();
+    QVERIFY(QRect(QPoint(0, 0), window.size()).contains(point));
+    QSignalSpy clicks(settings, SIGNAL(clicked(QQuickMouseEvent*)));
+    QVERIFY(clicks.isValid());
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, point);
+    QCOMPARE(clicks.count(), 1);
+    QTRY_VERIFY(root->property("activePage").value<QObject *>() != page);
+}
+
+void AutoLoginTests::portraitAppBarNavigation()
+{
+    for (const QSize &size : {QSize(600, 800), QSize(360, 800)}) {
+        QTemporaryDir directory;
+        DraftStore drafts(directory.path());
+        FakePdfClient client;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("overleafClient"), &client);
+        engine.rootContext()->setContextProperty(QStringLiteral("draftStore"), &drafts);
+        const QUrl base = QUrl::fromLocalFile(QStringLiteral(AUTO_LOGIN_QML_PATH));
+        QQmlComponent component(&engine);
+        component.setData(R"(
+            import QtQuick 2.0
+            import Sailfish.Silica 1.0
+            ApplicationWindow {
+                property var editorPage
+                property var activePage: pageStack.currentPage
+                initialPage: Component { Page {} }
+                function openEditor(largeScreen) {
+                    editorPage = pageStack.push(Qt.resolvedUrl("EditorPage.qml"),
+                        { projectId: "test", largeScreen: largeScreen }, PageStackAction.Immediate)
+                }
+            }
+        )", base);
+        QQuickRenderControl renderControl;
+        QQuickWindow window(&renderControl);
+        window.resize(size);
+        window.contentItem()->setSize(size);
+        QScopedPointer<QObject> root(component.create());
+        QVERIFY2(root, qPrintable(component.errorString()));
+        QQuickItem *rootItem = qobject_cast<QQuickItem *>(root.data());
+        QVERIFY(rootItem);
+        rootItem->setParentItem(window.contentItem());
+        rootItem->setSize(size);
+        QVERIFY(QMetaObject::invokeMethod(root.data(), "openEditor",
+                                          Q_ARG(QVariant, size.width() == 600)));
+        QObject *page = root->property("editorPage").value<QObject *>();
+        QVERIFY(page);
+        QTRY_VERIFY(page->property("forwardNavigation").toBool());
+        QObject *pdfPage = page->property("attachedPdfPage").value<QObject *>();
+        QVERIFY(pdfPage);
+        QQuickItem *scroller = page->findChild<QQuickItem *>(QStringLiteral("editorAppBarScroller"));
+        QQuickItem *button = page->findChild<QQuickItem *>(QStringLiteral("editorSciHub"));
+        QQuickItem *popup = page->findChild<QQuickItem *>(QStringLiteral("sciHubPopup"));
+        QVERIFY(scroller && button && popup);
+        QVERIFY(scroller->width() < size.width());
+        scroller->setProperty("contentX", scroller->property("contentWidth").toReal() - scroller->width());
+        renderControl.polishItems();
+        const QPoint buttonPoint = button->mapToScene(QPointF(button->width() / 2, button->height() / 2)).toPoint();
+        QVERIFY(buttonPoint.x() < scroller->width());
+        QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, buttonPoint);
+        QVERIFY(popup->isVisible());
+        QCOMPARE(root->property("activePage").value<QObject *>(), page);
+        QVERIFY(QMetaObject::invokeMethod(page, "dismissUtilityPopups"));
+        QTest::qWait(100);
+        QObject *stackObject = root->property("pageStack").value<QObject *>();
+        QObject *indicator = stackObject ? stackObject->property("_pageStackIndicator").value<QObject *>() : nullptr;
+        QQuickItem *indicatorItem = qobject_cast<QQuickItem *>(indicator);
+        QVERIFY(indicatorItem);
+        const QPoint indicatorPoint = indicatorItem->mapToScene(
+            QPointF(indicatorItem->width() - 2, indicatorItem->height() / 2)).toPoint();
+        QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier,
+                          indicatorPoint);
+        QTRY_COMPARE(root->property("activePage").value<QObject *>(), pdfPage);
+    }
+}
+
+void AutoLoginTests::pdfAppBarMouseClick()
+{
+    QTemporaryDir directory;
+    DraftStore drafts(directory.path());
+    FakePdfClient client;
+    QQmlEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("overleafClient"), &client);
+    engine.rootContext()->setContextProperty(QStringLiteral("draftStore"), &drafts);
+    const QUrl base = QUrl::fromLocalFile(QStringLiteral(AUTO_LOGIN_QML_PATH));
+    QQmlComponent component(&engine);
+    component.setData(R"(
+        import QtQuick 2.0
+        import Sailfish.Silica 1.0
+        ApplicationWindow {
+            width: 360; height: 800
+            property var editorPage
+            property var activePage: pageStack.currentPage
+            initialPage: Component { Page {} }
+            function openEditor() {
+                editorPage = pageStack.push(Qt.resolvedUrl("EditorPage.qml"),
+                    { projectId: "test", largeScreen: false }, PageStackAction.Immediate)
+            }
+            function forward() { pageStack.navigateForward(PageStackAction.Immediate) }
+        }
+    )", base);
+    QQuickRenderControl renderControl;
+    QQuickWindow window(&renderControl);
+    window.resize(360, 800);
+    window.contentItem()->setSize(QSizeF(360, 800));
+    QScopedPointer<QObject> root(component.create());
+    QVERIFY2(root, qPrintable(component.errorString()));
+    QQuickItem *rootItem = qobject_cast<QQuickItem *>(root.data());
+    QVERIFY(rootItem);
+    rootItem->setParentItem(window.contentItem());
+    QVERIFY(QMetaObject::invokeMethod(root.data(), "openEditor"));
+    QObject *editor = root->property("editorPage").value<QObject *>();
+    QVERIFY(editor);
+    QTRY_VERIFY(editor->property("attachedPdfPage").value<QObject *>());
+    QObject *pdfPage = editor->property("attachedPdfPage").value<QObject *>();
+    QVERIFY(QMetaObject::invokeMethod(root.data(), "forward"));
+    QTRY_COMPARE(root->property("activePage").value<QObject *>(), pdfPage);
+    QQuickItem *compile = pdfPage->findChild<QQuickItem *>(QStringLiteral("pdfPageCompile"));
+    QVERIFY(compile && compile->isVisible() && compile->isEnabled());
+    QVERIFY(compile->property("text").toString().isEmpty());
+    QTest::qWait(50);
+    renderControl.polishItems();
+    const QPoint point = compile->mapToScene(
+        QPointF(compile->width() / 2, compile->height() / 2)).toPoint();
+    QVERIFY(QRect(QPoint(0, 0), window.size()).contains(point));
+    QCOMPARE(editor->property("actionError").toString(), QString());
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, point);
+    QCOMPARE(editor->property("actionError").toString(),
+             QStringLiteral("Open a project file before saving."));
 }
 
 void AutoLoginTests::mouseButtonsFollowNavigationRules()
@@ -3672,6 +4653,8 @@ void AutoLoginTests::editorSettingsAndZoom()
     QQmlComponent settings(&engine, base.resolved(QUrl(QStringLiteral("SettingsPage.qml"))));
     QVERIFY2(settings.isReady(), qPrintable(settings.errorString()));
     client.editorFontScale = 130;
+    QQuickRenderControl settingsRenderControl;
+    QQuickWindow settingsWindow(&settingsRenderControl);
     QScopedPointer<QObject> settingsPage(settings.create());
     QVERIFY2(settingsPage, qPrintable(settings.errorString()));
     QCOMPARE(client.editorFontScale, 130);
@@ -3685,19 +4668,66 @@ void AutoLoginTests::editorSettingsAndZoom()
     QObject *saveHint = settingsPage->findChild<QObject *>(QStringLiteral("saveShortcutHint"));
     QVERIFY(saveHint);
     QVERIFY(saveHint->property("text").toString().contains(QStringLiteral("Ctrl+S")));
+    QObject *apiHint = settingsPage->findChild<QObject *>(QStringLiteral("wolframAlphaApiHint"));
+    QVERIFY(apiHint);
+    QVERIFY(apiHint->property("text").toString().contains(QStringLiteral("Full Results API")));
+    QVERIFY(apiHint->property("text").toString().contains(QStringLiteral("free")));
+    QVERIFY(apiHint->property("text").toString().contains(QStringLiteral("https://products.wolframalpha.com/api")));
     QObject *about = settingsPage->findChild<QObject *>(QStringLiteral("aboutDescription"));
     QObject *links = settingsPage->findChild<QObject *>(QStringLiteral("aboutLinks"));
     QVERIFY(about);
     QVERIFY(about->property("text").toString().contains(QStringLiteral("Overleaf")));
     QVERIFY(links);
-    QVERIFY(links->property("text").toString().contains(QStringLiteral("https://github.com/Arpolend2/Abedul")));
+    QCOMPARE(links->property("url").toString(), QStringLiteral("https://github.com/Arpolend2/Abedul"));
     QObject *version = settingsPage->findChild<QObject *>(QStringLiteral("aboutVersion"));
     QObject *heading = settingsPage->findChild<QObject *>(QStringLiteral("aboutReferencesHeading"));
-    QObject *references = settingsPage->findChild<QObject *>(QStringLiteral("aboutReferences"));
-    QVERIFY(version && heading && references);
-    QCOMPARE(version->property("text").toString(), QStringLiteral("Version: ") + QStringLiteral(ABEDUL_VERSION));
+    QObject *notes = settingsPage->findChild<QObject *>(QStringLiteral("aboutReleaseNotes"));
+    QVERIFY(version && heading && notes);
+    QCOMPARE(version->property("text").toString(), QStringLiteral("Abedul ") + QStringLiteral(ABEDUL_VERSION));
     QVERIFY(!heading->property("text").toString().isEmpty());
-    QVERIFY(references->property("text").toString().contains(QStringLiteral("PDFium")));
+    QVERIFY(notes->property("text").toString().contains(QStringLiteral("Reverso")));
+    QQuickItem *settingsContent = settingsPage->findChild<QQuickItem *>(QStringLiteral("settingsContent"));
+    QVERIFY(settingsContent);
+    QList<QQuickItem *> references;
+    for (QQuickItem *item : settingsContent->childItems()) {
+        if (item->objectName() == QStringLiteral("aboutReferenceLink"))
+            references.append(item);
+    }
+    QCOMPARE(references.size(), 5);
+    QVERIFY(references.at(2)->property("url").toString().contains(QStringLiteral("pdfium")));
+
+    QQuickItem *settingsItem = qobject_cast<QQuickItem *>(settingsPage.data());
+    QQuickItem *aboutHeader = settingsPage->findChild<QQuickItem *>(QStringLiteral("aboutHeader"));
+    QQuickItem *icon = settingsPage->findChild<QQuickItem *>(QStringLiteral("aboutIcon"));
+    QQuickItem *description = qobject_cast<QQuickItem *>(about);
+    QQuickItem *versionItem = qobject_cast<QQuickItem *>(version);
+    QQuickItem *flickable = settingsPage->findChild<QQuickItem *>(QStringLiteral("settingsFlickable"));
+    QVERIFY(settingsItem && aboutHeader && icon && description && versionItem && flickable);
+    settingsItem->setParentItem(settingsWindow.contentItem());
+    settingsItem->setVisible(true);
+    const QUrl iconUrl = icon->property("source").toUrl();
+    const QImage aboutImage(iconUrl.toLocalFile());
+    QVERIFY(!aboutImage.isNull());
+    QCOMPARE(aboutImage.pixelColor(0, 0).alpha(), 0);
+    QVERIFY(aboutImage.pixelColor(aboutImage.width() / 2, aboutImage.height() / 2).alpha() > 0);
+    for (const QSizeF size : { QSizeF(360, 800), QSizeF(800, 360) }) {
+        settingsItem->setSize(size);
+        settingsWindow.resize(size.toSize());
+        settingsWindow.contentItem()->setSize(size);
+        QCoreApplication::processEvents();
+        settingsRenderControl.polishItems();
+        const QPointF iconPos = icon->mapToItem(aboutHeader, QPointF());
+        const QPointF descriptionPos = description->mapToItem(aboutHeader, QPointF());
+        const QPointF versionPos = versionItem->mapToItem(aboutHeader, QPointF());
+        QVERIFY(icon->width() > 0 && description->width() > 0);
+        QVERIFY(iconPos.x() + icon->width() <= descriptionPos.x());
+        QVERIFY(descriptionPos.x() + description->width() <= aboutHeader->width());
+        QVERIFY(descriptionPos.y() + description->height() <= aboutHeader->height() + 0.1);
+        QVERIFY(versionPos.y() >= 0);
+        QVERIFY(flickable->property("contentHeight").toReal() > size.height());
+        QVERIFY(flickable->setProperty("contentY", flickable->property("contentHeight").toReal() - size.height()));
+        QVERIFY(flickable->property("contentY").toReal() > 0);
+    }
 }
 
 void AutoLoginTests::portraitPdfNavigation()
@@ -3714,7 +4744,7 @@ void AutoLoginTests::portraitPdfNavigation()
         import QtQuick 2.0
         import Sailfish.Silica 1.0
         ApplicationWindow {
-            width: 600; height: 800
+            width: 360; height: 800
             property var editorPage
             property var activePage: pageStack.currentPage
             initialPage: Component { Page {} }
@@ -3735,10 +4765,54 @@ void AutoLoginTests::portraitPdfNavigation()
     QObject *pdfPage = editorPage->property("attachedPdfPage").value<QObject *>();
     QVERIFY(editorPage->property("forwardNavigation").toBool());
     QQuickItem *pdf = editorPage->findChild<QQuickItem *>(QStringLiteral("editorPdfPane"));
+    QQuickItem *editorAppBar = editorPage->findChild<QQuickItem *>(QStringLiteral("editorAppBar"));
+    QQuickItem *editorCompile = editorPage->findChild<QQuickItem *>(QStringLiteral("saveAndCompile"));
+    QQuickItem *editorOpenPdf = editorPage->findChild<QQuickItem *>(QStringLiteral("openCachedPdf"));
+    QQuickItem *editorFiles = editorPage->findChild<QQuickItem *>(QStringLiteral("editorProjectFiles"));
+    QQuickItem *editorMore = editorPage->findChild<QQuickItem *>(QStringLiteral("editorMoreActions"));
+    QQuickItem *editorSpacer = editorPage->findChild<QQuickItem *>(
+        QStringLiteral("editorRightActionsSpacer"));
+    QQuickItem *pdfAppBar = pdfPage->findChild<QQuickItem *>(QStringLiteral("pdfPageAppBar"));
+    QQuickItem *pdfActionsSpacer = pdfPage->findChild<QQuickItem *>(
+        QStringLiteral("pdfPageActionsSpacer"));
+    QQuickItem *pdfCompile = pdfPage->findChild<QQuickItem *>(QStringLiteral("pdfPageCompile"));
+    QQuickItem *pdfOpenExternal = pdfPage->findChild<QQuickItem *>(QStringLiteral("pdfPageOpenExternal"));
     QVERIFY(pdf);
+    QVERIFY(editorAppBar && editorCompile && editorOpenPdf && editorFiles && editorMore && editorSpacer);
+    QVERIFY(pdfAppBar && pdfActionsSpacer && pdfCompile && pdfOpenExternal);
+    QVERIFY(!editorPage->property("wideTablet").toBool());
+    QVERIFY(editorPage->property("editorActionsInMore").toBool());
+    QVERIFY(!editorCompile->property("visible").toBool());
+    QVERIFY(!editorOpenPdf->property("visible").toBool());
+    QVERIFY(editorFiles->property("visible").toBool());
+    QVERIFY(editorMore->property("visible").toBool());
+    QVERIFY(editorSpacer->property("visible").toBool());
+    for (const QString &name : {
+             QStringLiteral("downloadProjectArchive"), QStringLiteral("editorSearch"),
+             QStringLiteral("projectChat"), QStringLiteral("projectHistory"),
+             QStringLiteral("projectSharing"), QStringLiteral("projectComments"),
+             QStringLiteral("editorAiAssistant"), QStringLiteral("editorKeyboardShortcuts"),
+             QStringLiteral("editorSettings")
+         }) {
+        QQuickItem *action = editorPage->findChild<QQuickItem *>(name);
+        QVERIFY(action);
+        QVERIFY2(!action->property("visible").toBool(), qPrintable(name));
+    }
+    QVERIFY(editorPage->findChild<QObject *>(QStringLiteral("editorMorePopup")));
+    QVERIFY(editorPage->findChild<QObject *>(QStringLiteral("moreKeyboardShortcuts")));
+    QQuickItem *moreShortcutList = editorPage->findChild<QQuickItem *>(
+        QStringLiteral("editorMoreShortcutList"));
+    QVERIFY(moreShortcutList);
+    QVERIFY(moreShortcutList->property("text").toString().contains(QStringLiteral("Ctrl+S")));
     QCOMPARE(pdf->parentItem(), pdfPage->property("contentHost").value<QQuickItem *>());
     QVERIFY(QMetaObject::invokeMethod(window.data(), "forward"));
     QTRY_COMPARE(window->property("activePage").value<QObject *>(), pdfPage);
+    QVERIFY(pdfAppBar->property("visible").toBool());
+    QVERIFY(pdfCompile->property("visible").toBool());
+    QVERIFY(pdfOpenExternal->property("visible").toBool());
+    const QList<QQuickItem *> pdfAppBarItems = pdfCompile->parentItem()->childItems();
+    QVERIFY(pdfAppBarItems.indexOf(pdfActionsSpacer) < pdfAppBarItems.indexOf(pdfCompile));
+    QVERIFY(pdfAppBarItems.indexOf(pdfCompile) < pdfAppBarItems.indexOf(pdfOpenExternal));
     QVERIFY(QMetaObject::invokeMethod(window.data(), "back"));
     QTRY_COMPARE(window->property("activePage").value<QObject *>(), editorPage);
     QVERIFY(QMetaObject::invokeMethod(window.data(), "forward"));
@@ -3748,12 +4822,76 @@ void AutoLoginTests::portraitPdfNavigation()
     qobject_cast<QQuickItem *>(editorPage)->setSize(QSizeF(900, 600));
     qobject_cast<QQuickItem *>(pdfPage)->setSize(QSizeF(900, 600));
     editorPage->setProperty("largeScreen", true);
+    QVERIFY(editorPage->property("wideTablet").toBool());
+    QVERIFY(!editorPage->property("editorActionsInMore").toBool());
+    QVERIFY(!editorMore->property("visible").toBool());
     QTRY_COMPARE(window->property("activePage").value<QObject *>(), editorPage);
+    QVERIFY(editorCompile->property("visible").toBool());
+    QVERIFY(editorOpenPdf->property("visible").toBool());
     QTRY_VERIFY(!editorPage->property("forwardNavigation").toBool());
     QQuickItem *panes = editorPage->findChild<QQuickItem *>(QStringLiteral("editorPanes"));
     QVERIFY(pdf && panes);
     QCOMPARE(pdf->parentItem(), panes);
+
+    window->setProperty("width", 600);
+    window->setProperty("height", 800);
+    qobject_cast<QQuickItem *>(editorPage)->setSize(QSizeF(600, 800));
+    qobject_cast<QQuickItem *>(pdfPage)->setSize(QSizeF(600, 800));
+    QVERIFY(!editorPage->property("wideTablet").toBool());
+    QVERIFY(editorPage->property("editorActionsInMore").toBool());
+    QVERIFY(editorMore->property("visible").toBool());
+    QVERIFY(!editorCompile->property("visible").toBool());
+    QVERIFY(!editorOpenPdf->property("visible").toBool());
+    for (const QString &name : {
+             QStringLiteral("downloadProjectArchive"), QStringLiteral("editorSearch"),
+             QStringLiteral("projectChat"), QStringLiteral("projectHistory"),
+             QStringLiteral("projectSharing"), QStringLiteral("projectComments"),
+             QStringLiteral("editorAiAssistant"), QStringLiteral("editorKeyboardShortcuts"),
+             QStringLiteral("editorSettings")
+         }) {
+        QQuickItem *action = editorPage->findChild<QQuickItem *>(name);
+        QVERIFY(action);
+        QVERIFY2(!action->property("visible").toBool(), qPrintable(name));
+    }
+
+    window->setProperty("width", 900);
+    window->setProperty("height", 600);
+    qobject_cast<QQuickItem *>(editorPage)->setSize(QSizeF(900, 600));
+    qobject_cast<QQuickItem *>(pdfPage)->setSize(QSizeF(900, 600));
     editorPage->setProperty("largeScreen", false);
+    QVERIFY(!editorPage->property("wideTablet").toBool());
+    QVERIFY(editorPage->property("editorActionsInMore").toBool());
+    QVERIFY(editorMore->property("visible").toBool());
+    QVERIFY(!editorCompile->property("visible").toBool());
+    QVERIFY(!editorOpenPdf->property("visible").toBool());
+    for (const QString &name : {
+             QStringLiteral("downloadProjectArchive"), QStringLiteral("editorSearch"),
+             QStringLiteral("projectChat"), QStringLiteral("projectHistory"),
+             QStringLiteral("projectSharing"), QStringLiteral("projectComments"),
+             QStringLiteral("editorAiAssistant"), QStringLiteral("editorKeyboardShortcuts"),
+             QStringLiteral("editorSettings")
+         }) {
+        QQuickItem *action = editorPage->findChild<QQuickItem *>(name);
+        QVERIFY(action);
+        QVERIFY2(!action->property("visible").toBool(), qPrintable(name));
+    }
+    QTRY_VERIFY(editorPage->property("attachedPdfPage").value<QObject *>());
+    QObject *landscapePhonePdfPage = editorPage->property("attachedPdfPage").value<QObject *>();
+    QVERIFY(QMetaObject::invokeMethod(window.data(), "forward"));
+    QTRY_COMPARE(window->property("activePage").value<QObject *>(), landscapePhonePdfPage);
+    QQuickItem *landscapePhonePdfAppBar = landscapePhonePdfPage->findChild<QQuickItem *>(
+        QStringLiteral("pdfPageAppBar"));
+    QVERIFY(landscapePhonePdfAppBar);
+    QVERIFY(landscapePhonePdfAppBar->property("visible").toBool());
+    QVERIFY(QMetaObject::invokeMethod(window.data(), "back"));
+    QTRY_COMPARE(window->property("activePage").value<QObject *>(), editorPage);
+
+    window->setProperty("width", 360);
+    window->setProperty("height", 800);
+    qobject_cast<QQuickItem *>(editorPage)->setSize(QSizeF(360, 800));
+    qobject_cast<QQuickItem *>(pdfPage)->setSize(QSizeF(360, 800));
+    QVERIFY(!editorPage->property("wideTablet").toBool());
+    QVERIFY(editorPage->property("editorActionsInMore").toBool());
     QTRY_VERIFY(editorPage->property("forwardNavigation").toBool());
 }
 
@@ -3801,7 +4939,9 @@ void AutoLoginTests::changesServerFromProjects()
     QVERIFY2(page, qPrintable(component.errorString()));
     QObject *menu = page->findChild<QObject *>(QStringLiteral("changeServer"));
     QVERIFY(menu);
-    QVERIFY(QMetaObject::invokeMethod(menu, "clicked"));
+    void *mouseEvent = nullptr;
+    QVERIFY(QMetaObject::invokeMethod(menu, "clicked",
+                                      QGenericArgument("QQuickMouseEvent*", &mouseEvent)));
     QCOMPARE(stack.pops, 1);
 }
 

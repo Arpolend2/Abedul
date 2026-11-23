@@ -1,5 +1,6 @@
 import QtQuick 2.5
 import Sailfish.Silica 1.0
+import Aurora.Controls 1.0
 import ru.auroraos.amberpdf 1.0
 import Abedul 1.0
 
@@ -12,6 +13,8 @@ Page {
     property string compileRoot: ""
     property string currentFile: ""
     property bool largeScreen: Screen.sizeCategory >= Screen.Large
+    readonly property bool wideTablet: largeScreen && width > height
+    readonly property bool editorActionsInMore: !wideTablet
     property var attachedPdfPage: null
     property bool hasStandaloneDraft: false
     property bool showingCachedFile: false
@@ -27,7 +30,27 @@ Page {
     property bool compileHintShown: false
     property bool searchVisible: false
     property string searchMessage: ""
+    readonly property string keyboardShortcutHintText: {
+        var shortcuts = [
+            qsTr("Ctrl+S: Save and compile"),
+            qsTr("Ctrl+Y: Redo"),
+            qsTr("Ctrl+F: Find and replace"),
+            qsTr("Ctrl+W: Solve the equation with WolframAlpha"),
+            qsTr("Ctrl+R: Translate the selection or word with Reverso"),
+            qsTr("Ctrl++ / Ctrl+-: Zoom the editor or PDF"),
+            qsTr("Ctrl+mouse wheel: Zoom under the pointer"),
+            qsTr("Tab: Accept a completion or replace a search match"),
+            qsTr("Up / Down: Previous / next search result"),
+            qsTr("Escape: Close search")
+        ]
+        if (aiEnabled) {
+            shortcuts.push(qsTr("Ctrl+I: Request an AI completion"))
+            shortcuts.push(qsTr("Ctrl+Shift+I: Open AI generation"))
+        }
+        return shortcuts.join("\n")
+    }
     property string zoomTarget: "editor"
+    property string wheelTarget: "editor"
     property string coverSnippet: ""
     property string coverSnippetFile: ""
     property bool coverHasEdits: false
@@ -199,6 +222,104 @@ Page {
         id: aiGeneratorClient
         objectName: "aiGeneratorClient"
     }
+    property bool wolframVisible: false
+    property bool wolframInputVisible: false
+    property bool wolframInputSubmitted: false
+    readonly property bool utilityPopupOpen: wolframVisible || wolframInputVisible
+                                             || sciHubPopup.visible || reversoPopup.showing
+                                             || aiGeneratorPopup.showing
+    function dismissUtilityPopups() {
+        closeWolframResult()
+        closeWolframInput()
+        sciHubPopup.visible = false
+        reversoPopup.close()
+        aiGeneratorPopup.close()
+        if (page.status === PageStatus.Active && editor.enabled)
+            editor._editor.forceActiveFocus()
+    }
+    WolframAlphaClient {
+        id: wolframClient
+        objectName: "editorWolframAlphaClient"
+    }
+    function closeWolframResult() {
+        if (page.wolframVisible)
+            wolframClient.cancel()
+        page.wolframVisible = false
+    }
+    function requestWolframResult() {
+        if (page.status !== PageStatus.Active || !page.initialized || !editor.enabled
+                || !editor._editor.activeFocus || editor._editor.inputMethodComposing || wolframClient.busy)
+            return
+        var equation = wolframClient.equationAtCursor(editor.text, editor._editor.cursorPosition)
+        if (!equation.length)
+            return
+        page.closeWolframInput()
+        sciHubPopup.visible = false
+        reversoPopup.close()
+        aiGeneratorPopup.close()
+        page.clearAiCompletion()
+        wolframClient.reload()
+        page.wolframVisible = true
+        if (!wolframClient.error.length)
+            wolframClient.request(equation)
+    }
+    function openWolframInput() {
+        if (page.wolframInputVisible) {
+            wolframInput.forceActiveFocus()
+            return
+        }
+        page.closeWolframResult()
+        sciHubPopup.visible = false
+        reversoPopup.close()
+        aiGeneratorPopup.close()
+        page.clearAiCompletion()
+        page.wolframInputSubmitted = false
+        wolframInput.text = ""
+        page.wolframInputVisible = true
+        wolframInput.forceActiveFocus()
+    }
+    function closeWolframInput() {
+        if (page.wolframInputVisible)
+            wolframClient.cancel()
+        page.wolframInputVisible = false
+    }
+    function submitWolframInput() {
+        if (!page.wolframInputVisible || wolframClient.busy)
+            return
+        wolframClient.reload()
+        page.wolframInputSubmitted = true
+        if (!wolframClient.error.length)
+            wolframClient.request(wolframInput.text)
+    }
+    function openReverso() {
+        page.closeWolframResult()
+        page.closeWolframInput()
+        sciHubPopup.visible = false
+        aiGeneratorPopup.close()
+        page.clearAiCompletion()
+        reversoPopup.open()
+    }
+    function translateReversoWord() {
+        if (page.status !== PageStatus.Active || !page.initialized || !editor.enabled
+                || !editor._editor.activeFocus || editor._editor.inputMethodComposing)
+            return
+        var text = reversoPopup.client.plainTextAtCursor(editor.text, editor._editor.cursorPosition,
+                                                       editor._editor.selectionStart, editor._editor.selectionEnd)
+        if (!text.length)
+            return
+        page.closeWolframResult()
+        page.closeWolframInput()
+        sciHubPopup.visible = false
+        aiGeneratorPopup.close()
+        page.clearAiCompletion()
+        reversoPopup.translateText(text)
+    }
+    onCurrentFileChanged: {
+        closeWolframResult()
+        aiGeneratorPopup.close()
+        if (reversoPopup.showing && reversoPopup.reverseDirection)
+            reversoPopup.close()
+    }
     function aiCompletionCurrent() {
         return page.aiEnabled && aiClient.authenticated && !page.offline && page.initialized
                 && page.status === PageStatus.Active
@@ -215,9 +336,20 @@ Page {
         if (!page.aiEnabled)
             return
         clearAiCompletion()
-        aiGeneratorClient.reload()
-        pageStack.push(Qt.resolvedUrl("AiAssistantPage.qml"),
-                       { "client": aiGeneratorClient, "editorPage": page })
+        closeWolframResult()
+        closeWolframInput()
+        sciHubPopup.visible = false
+        reversoPopup.close()
+        if (!aiGeneratorPopup.showing)
+            aiGeneratorClient.reload()
+        aiGeneratorPopup.open()
+    }
+    function openSciHubSearch() {
+        var url = overleafClient.sciHubSearchUrl(sciHubInput.text)
+        if (!url || !url.toString().length || !Qt.openUrlExternally(url))
+            sciHubError.text = qsTr("Could not open the address. Check the Sci-Hub address in Settings.")
+        else
+            sciHubPopup.visible = false
     }
     function applyAiGeneration(file, original, start, end, result) {
         if (page.offline || page.currentFile !== file || editor.text !== original
@@ -318,6 +450,7 @@ Page {
     property string coverPdfError: ""
     property int coverPdfRevision: 0
     property var pendingSyncSource: null
+    property var pendingHistoryNavigation: null
     property string syncRequestFile: ""
     property string syncRequestText: ""
     property string pendingSnapshotFile: ""
@@ -341,6 +474,7 @@ Page {
     }
     backNavigation: !dirty && !overleafClient.sourceBusy
     forwardNavigation: !panes.sideBySide && !!attachedPdfPage && !overleafClient.sourceBusy
+    _clickablePageIndicators: !utilityPopupOpen
 
     function updatePdfNavigation() {
         if (typeof pageStack === "undefined")
@@ -349,7 +483,7 @@ Page {
             pdfNavigationTimer.restart()
             return
         }
-        if (attachedPdfPage && pageStack.currentPage === attachedPdfPage && page.largeScreen
+        if (attachedPdfPage && pageStack.currentPage === attachedPdfPage && page.wideTablet
                 && attachedPdfPage.width > attachedPdfPage.height) {
             pageStack.navigateBack(PageStackAction.Immediate)
             pdfNavigationTimer.restart()
@@ -388,6 +522,33 @@ Page {
             onWidthChanged: if (status === PageStatus.Active) pdfNavigationTimer.restart()
             onHeightChanged: if (status === PageStatus.Active) pdfNavigationTimer.restart()
             Component.onDestruction: if (page.attachedPdfPage === separatePdfPage) page.attachedPdfPage = null
+            AppBar {
+                id: pdfPageAppBar
+                objectName: "pdfPageAppBar"
+                visible: page.editorActionsInMore
+                width: parent.width
+                headerText: page.projectName
+                maximumHeaderWidth: Theme.dp(360)
+
+                AppBarSpacer {
+                    objectName: "pdfPageActionsSpacer"
+                    fixedWidth: 0
+                }
+                AppBarButton {
+                    objectName: "pdfPageCompile"
+                    context: qsTr("Compile")
+                    icon.source: "image://theme/icon-m-play"
+                    enabled: !page.offline && !overleafClient.sourceBusy && !overleafClient.pdfBusy
+                    onClicked: page.saveAndCompile()
+                }
+                AppBarButton {
+                    objectName: "pdfPageOpenExternal"
+                    context: qsTr("Open PDF in another app")
+                    icon.source: "image://theme/icon-m-file-pdf"
+                    enabled: overleafClient.pdfPath.length > 0 && !overleafClient.pdfBusy
+                    onClicked: externalPdf.open()
+                }
+            }
             Shortcut {
                 sequence: StandardKey.Save
                 enabled: separatePdfPage.status === PageStatus.Active
@@ -396,20 +557,13 @@ Page {
             }
             SilicaFlickable {
                 id: pdfPageFlick
-                anchors.fill: parent
-                contentHeight: height
-                PullDownMenu {
-                    MenuItem {
-                        text: qsTr("Open PDF in another app")
-                        enabled: overleafClient.pdfPath.length > 0 && !overleafClient.pdfBusy
-                        onClicked: externalPdf.open()
-                    }
-                    MenuItem {
-                        text: qsTr("Save and compile")
-                        enabled: !page.offline && !overleafClient.sourceBusy && !overleafClient.pdfBusy
-                        onClicked: page.saveAndCompile()
-                    }
+                anchors {
+                    top: page.editorActionsInMore ? pdfPageAppBar.bottom : parent.top
+                    left: parent.left
+                    right: parent.right
+                    bottom: parent.bottom
                 }
+                contentHeight: height
                 Item {
                     id: pdfPageHost
                     width: parent.width
@@ -644,6 +798,7 @@ Page {
             overleafClient.openProjectSource(projectId, path)
             return true
         }
+
         saveDraft()
         if (dirty || overleafClient.sourceBusy)
             return false
@@ -662,6 +817,45 @@ Page {
         }
         overleafClient.openProjectSource(projectId, path)
         return true
+    }
+
+    function openHistoryLocation(target) {
+        var path = normalizeSyncPath(target.path || "")
+        if (!path)
+            return false
+        pendingHistoryNavigation = { path: path, text: target.text || "" }
+        if (path === currentFile && !overleafClient.sourceBusy) {
+            finishHistoryNavigation()
+        } else if (!openProjectFile(path)) {
+            pendingHistoryNavigation = null
+            return false
+        }
+        return true
+    }
+
+    function finishHistoryNavigation() {
+        var target = pendingHistoryNavigation
+        if (!target || target.path !== currentFile)
+            return
+        pendingHistoryNavigation = null
+        var fragment = target.text
+        var index = fragment.length ? editor.text.indexOf(fragment) : -1
+        if (index < 0 || editor.text.indexOf(fragment, index + 1) >= 0)
+            return
+        editor._editor.cursorPosition = index
+        editor._editor.forceActiveFocus()
+        var rect = editor._editor.positionToRectangle(index)
+        var mapped = editor._editor.mapToItem(codePane.contentItem, rect.x, rect.y)
+        codePane.contentY = Math.max(0, Math.min(codePane.contentHeight - codePane.height,
+                                                mapped.y - codePane.height / 2))
+        if (!offline && overleafClient.pdfPath.length && !overleafClient.pdfBusy
+                && !overleafClient.sourceBusy && baseKnown && editor.text === baseText
+                && (currentFile !== compiledSnapshotFile || editor.text === compiledSnapshotText)) {
+            syncRequestFile = currentFile
+            syncRequestText = editor.text
+            var before = editor.text.substring(0, index).split("\n")
+            overleafClient.syncSourceToPdf(projectId, currentFile, before.length, before[before.length - 1].length)
+        }
     }
 
     function syncAllowed() {
@@ -779,6 +973,11 @@ Page {
             scheduleCoverPdfCapture()
         } else {
             clearAiCompletion()
+            closeWolframResult()
+            closeWolframInput()
+            reversoPopup.close()
+            aiGeneratorPopup.close()
+            sciHubPopup.visible = false
         }
     }
     Component.onDestruction: {
@@ -824,6 +1023,7 @@ Page {
             if (overleafClient.sourceError.length && !overleafClient.sourceBusy) {
                 page.pendingCompileRoot = ""
                 page.pendingSyncSource = null
+                page.pendingHistoryNavigation = null
             }
         }
         onPdfPathChanged: {
@@ -878,7 +1078,7 @@ Page {
             if (!useDraft && !draftStore.saveFileWithBase(overleafClient.server, page.projectId,
                     page.currentFile, editor.text, editor.text, true))
                 page.actionError = draftStore.error
-            if (/\.tex$/i.test(page.currentFile) && !page.pendingSyncSource) {
+            if (/\.tex$/i.test(page.currentFile) && !page.pendingSyncSource && !page.pendingHistoryNavigation) {
                 page.compileRoot = page.currentFile
                 if (!draftStore.saveCompileRoot(overleafClient.server, page.projectId, page.compileRoot))
                     page.actionError = draftStore.error
@@ -893,6 +1093,8 @@ Page {
                 page.pendingSyncSource = null
                 page.moveToSource(location)
             }
+            if (page.pendingHistoryNavigation && page.pendingHistoryNavigation.path === page.currentFile)
+                page.finishHistoryNavigation()
         }
         onSourceSaved: {
             if (!page.started || path !== page.currentFile || !page.pendingCompileRoot.length)
@@ -971,6 +1173,29 @@ Page {
     }
 
     Shortcut {
+        objectName: "editorRedoShortcut"
+        sequence: "Ctrl+Y"
+        enabled: page.status === PageStatus.Active && page.initialized && !page.offline
+                 && editor.enabled && editor._editor.activeFocus && !editor._editor.inputMethodComposing
+        onActivated: editor._editor.redo()
+    }
+    Shortcut {
+        objectName: "wolframAlphaShortcut"
+        sequence: "Ctrl+W"
+        enabled: page.status === PageStatus.Active && page.initialized && editor.enabled
+                 && editor._editor.activeFocus && !editor._editor.inputMethodComposing && !wolframClient.busy
+        autoRepeat: false
+        onActivated: page.requestWolframResult()
+    }
+    Shortcut {
+        objectName: "reversoShortcut"
+        sequence: "Ctrl+R"
+        enabled: page.status === PageStatus.Active && page.initialized && editor.enabled
+                 && editor._editor.activeFocus && !editor._editor.inputMethodComposing
+        autoRepeat: false
+        onActivated: page.translateReversoWord()
+    }
+    Shortcut {
         objectName: "aiCompletionShortcut"
         sequence: "Ctrl+I"
         enabled: page.aiEnabled && page.status === PageStatus.Active && !page.offline
@@ -1003,11 +1228,18 @@ Page {
     Shortcut {
         objectName: "searchCloseShortcut"
         sequence: "Escape"
-        enabled: page.status === PageStatus.Active && page.searchVisible
+        enabled: page.status === PageStatus.Active && page.searchVisible && !page.utilityPopupOpen
                  && !searchInput.inputMethodComposing && !replaceInput.inputMethodComposing
                  && !editor.inputMethodComposing
         autoRepeat: false
         onActivated: page.searchVisible = false
+    }
+    Shortcut {
+        objectName: "utilityPopupCloseShortcut"
+        sequence: "Escape"
+        enabled: page.status === PageStatus.Active && page.utilityPopupOpen
+        autoRepeat: false
+        onActivated: page.dismissUtilityPopups()
     }
     Shortcut {
         objectName: "searchPreviousShortcut"
@@ -1055,7 +1287,10 @@ Page {
                 page.zoomTarget = "editor"
             page.clearAiCompletion()
         }
-        onCursorPositionChanged: page.clearAiCompletion()
+        onCursorPositionChanged: {
+            page.clearAiCompletion()
+            page.closeWolframResult()
+        }
         onSelectionStartChanged: page.clearAiCompletion()
         onSelectionEndChanged: page.clearAiCompletion()
         onInputMethodComposingChanged: page.clearAiCompletion()
@@ -1098,130 +1333,630 @@ Page {
         interval: 5000
     }
 
-    WheelScroll {
-        objectName: "editorPulleyWheel"
-        parent: page
-        anchors.fill: undefined
+    Flickable {
+        id: editorAppBarScroller
+        objectName: "editorAppBarScroller"
         anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.right: parent.right
-        height: Math.min(page.height, header.height
-                         + (headerPane.pullDownMenu.active ? headerPane.pullDownMenu.height : 0))
-        flickable: headerPane
+        width: Math.max(0, parent.width - (page.forwardNavigation ? Theme.pageStackIndicatorWidth : 0))
+        height: editorAppBar.height
+        z: Theme.ZOrderHeader
+        clip: true
+        contentWidth: {
+            var required = 2 * Theme.horizontalPageMargin + Theme.paddingMedium + Theme.dp(8)
+            for (var i = 0; i < editorAppBar.content.length; ++i) {
+                var item = editorAppBar.content[i]
+                if (item.visible)
+                    required += item.hasOwnProperty("fixedWidth") ? item.fixedWidth : item.implicitWidth
+            }
+            return Math.max(width, required)
+        }
+        contentHeight: height
+        flickableDirection: Flickable.HorizontalFlick
+        boundsBehavior: Flickable.StopAtBounds
+        interactive: contentWidth > width
+        onWidthChanged: contentX = Math.max(0, Math.min(contentX, contentWidth - width))
+        onContentWidthChanged: contentX = Math.max(0, Math.min(contentX, contentWidth - width))
+
+        HorizontalScrollDecorator {}
+    }
+    MouseArea {
+        anchors.top: editorAppBarScroller.top
+        width: page.width
+        height: editorAppBarScroller.height
+        z: Theme.ZOrderHeader + 1
+        enabled: page.utilityPopupOpen
+        onClicked: page.dismissUtilityPopups()
     }
 
-    SilicaFlickable {
-        id: headerPane
-        objectName: "editorHeader"
-        anchors.fill: parent
-        contentHeight: height
-        clip: true
-        PullDownMenu {
-            background: Rectangle {
-                width: parent.width
-                height: parent.height
-                color: page.editorBackground
-            }
-            MenuLabel {
-                objectName: "editorProjectName"
-                text: page.projectName
-            }
-            MenuItem {
-                objectName: "editorSettings"
-                text: qsTr("Settings")
-                onClicked: pageStack.push(Qt.resolvedUrl("SettingsPage.qml"))
-            }
-            MenuItem {
-                objectName: "editorAiAssistant"
-                visible: page.aiEnabled
-                text: qsTr("Generate with AI")
-                onClicked: page.openAiGenerator()
-            }
-            MenuItem {
-                objectName: "projectSharing"
-                visible: !page.offline
-                text: qsTr("Sharing")
-                onClicked: pageStack.push(Qt.resolvedUrl("ProjectCollaborationPage.qml"), {
-                    "projectId": page.projectId, "mode": "share"
-                })
-            }
-            MenuItem {
-                objectName: "projectHistory"
-                visible: !page.offline
-                text: qsTr("History")
-                onClicked: pageStack.push(Qt.resolvedUrl("ProjectCollaborationPage.qml"), {
-                    "projectId": page.projectId, "mode": "history"
-                })
-            }
-            MenuItem {
-                objectName: "projectComments"
-                visible: overleafClient.commentsAvailable
-                text: qsTr("Comments")
-                onClicked: pageStack.push(Qt.resolvedUrl("ProjectCollaborationPage.qml"), {
-                    "projectId": page.projectId, "mode": "comments"
-                })
-            }
-            MenuItem {
-                objectName: "projectChat"
-                visible: !page.offline
-                text: qsTr("Chat")
-                onClicked: pageStack.push(Qt.resolvedUrl("ProjectCollaborationPage.qml"), {
-                    "projectId": page.projectId, "mode": "chat"
-                })
-            }
-            MenuItem {
-                objectName: "editorSearch"
-                text: qsTr("Find and replace")
-                onClicked: {
-                    page.searchVisible = true
-                    searchInput.forceActiveFocus()
+    AppBar {
+        id: editorAppBar
+        objectName: "editorAppBar"
+        parent: editorAppBarScroller.contentItem
+        width: editorAppBarScroller.contentWidth
+        headerText: page.projectName
+        maximumHeaderWidth: Theme.dp(360)
+
+        AppBarButton {
+            objectName: "saveAndCompile"
+            text: qsTr("Compile")
+            context: qsTr("Compile")
+            icon.source: "image://theme/icon-m-play"
+            layoutDirection: Qt.LeftToRight
+            visible: !page.editorActionsInMore
+            enabled: !page.offline && !overleafClient.sourceBusy && !overleafClient.pdfBusy
+            onClicked: page.saveAndCompile()
+        }
+        AppBarButton {
+            objectName: "editorProjectFiles"
+            text: qsTr("Files")
+            context: qsTr("Files")
+            icon.source: "image://theme/icon-m-file-folder"
+            layoutDirection: Qt.LeftToRight
+            onClicked: pageStack.push(Qt.resolvedUrl("ProjectFilesPage.qml"), {
+                "projectId": page.projectId,
+                "projectName": page.projectName,
+                "editorPage": page
+            })
+        }
+        AppBarButton {
+            objectName: "editorMoreActions"
+            text: qsTr("More")
+            context: qsTr("More")
+            icon.source: "image://theme/icon-m-menu"
+            layoutDirection: Qt.LeftToRight
+            visible: page.editorActionsInMore
+            onClicked: moreActionsPopup.open()
+
+            PopupMenu {
+                id: moreActionsPopup
+                objectName: "editorMorePopup"
+                preferredWidth: Math.min(page.width - 2 * Theme.horizontalPageMargin, Theme.dp(420))
+                headerBackground: PopupMenuHeader.SolidBackground
+                headerText: qsTr("More")
+
+                PopupMenuItem {
+                    objectName: "moreDownloadProjectArchive"
+                    text: qsTr("Download saved project ZIP")
+                    enabled: !page.offline && !overleafClient.archiveBusy
+                    onClicked: overleafClient.downloadProjectArchive(page.projectId)
+                }
+                PopupMenuItem {
+                    objectName: "moreEditorSearch"
+                    text: qsTr("Find and replace")
+                    onClicked: {
+                        page.searchVisible = true
+                        searchInput.forceActiveFocus()
+                    }
+                }
+                PopupMenuItem {
+                    objectName: "moreProjectChat"
+                    text: qsTr("Chat")
+                    visible: !page.offline
+                    onClicked: pageStack.push(Qt.resolvedUrl("ProjectCollaborationPage.qml"), {
+                        "projectId": page.projectId, "mode": "chat"
+                    })
+                }
+                PopupMenuItem {
+                    objectName: "moreProjectHistory"
+                    text: qsTr("History")
+                    visible: !page.offline
+                    onClicked: pageStack.push(Qt.resolvedUrl("ProjectCollaborationPage.qml"), {
+                        "projectId": page.projectId, "mode": "history", "editorPage": page
+                    })
+                }
+                PopupMenuItem {
+                    objectName: "moreProjectSharing"
+                    text: qsTr("Access")
+                    visible: !page.offline
+                    onClicked: pageStack.push(Qt.resolvedUrl("ProjectCollaborationPage.qml"), {
+                        "projectId": page.projectId, "mode": "share"
+                    })
+                }
+                PopupMenuItem {
+                    objectName: "moreProjectComments"
+                    text: qsTr("Comments")
+                    visible: !page.offline
+                    enabled: overleafClient.commentsAvailable
+                    onClicked: pageStack.push(Qt.resolvedUrl("ProjectCollaborationPage.qml"), {
+                        "projectId": page.projectId, "mode": "comments"
+                    })
+                }
+                PopupMenuItem {
+                    objectName: "moreAiAssistant"
+                    text: qsTr("Generate with AI")
+                    visible: page.aiEnabled
+                    onClicked: page.openAiGenerator()
+                }
+                PopupMenuItem {
+                    objectName: "moreKeyboardShortcuts"
+                    text: qsTr("Keyboard shortcuts")
+                    onClicked: moreShortcutsPopup.open()
+                }
+                PopupMenuItem {
+                    objectName: "moreEditorSettings"
+                    text: qsTr("Settings")
+                    onClicked: pageStack.push(Qt.resolvedUrl("SettingsPage.qml"))
                 }
             }
-            MenuItem {
-                objectName: "openCachedPdf"
-                text: qsTr("Open PDF in another app")
-                enabled: overleafClient.pdfPath.length > 0 && !overleafClient.pdfBusy
-                onClicked: externalPdf.open()
-            }
-            MenuItem {
-                objectName: "downloadProjectArchive"
-                text: qsTr("Download saved project ZIP")
-                enabled: !page.offline && !overleafClient.archiveBusy
-                onClicked: overleafClient.downloadProjectArchive(page.projectId)
-            }
-            MenuItem {
-                objectName: "editorProjectFiles"
-                text: qsTr("Project files")
-                onClicked: pageStack.push(Qt.resolvedUrl("ProjectFilesPage.qml"), {
-                    "projectId": page.projectId,
-                    "projectName": page.projectName,
-                    "editorPage": page
-                })
-            }
-            MenuItem {
-                objectName: "saveAndCompile"
-                text: qsTr("Save and compile")
-                enabled: !page.offline && !overleafClient.sourceBusy && !overleafClient.pdfBusy
-                onClicked: page.saveAndCompile()
+
+            PopupMenu {
+                id: moreShortcutsPopup
+                objectName: "editorMoreShortcutsPopup"
+                preferredWidth: Math.min(page.width - 2 * Theme.horizontalPageMargin, Theme.dp(420))
+                headerBackground: PopupMenuHeader.SolidBackground
+                headerText: qsTr("Keyboard shortcuts")
+
+                Item {
+                    width: parent.width
+                    height: moreShortcutList.implicitHeight + 2 * Theme.paddingMedium
+
+                    Label {
+                        id: moreShortcutList
+                        objectName: "editorMoreShortcutList"
+                        anchors {
+                            top: parent.top
+                            left: parent.left
+                            right: parent.right
+                            margins: Theme.paddingMedium
+                        }
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: Theme.fontSizeSmall
+                        text: page.keyboardShortcutHintText
+                    }
+                }
             }
         }
+        AppBarSpacer {
+            objectName: "editorRightActionsSpacer"
+        }
+        AppBarButton {
+            objectName: "downloadProjectArchive"
+            context: qsTr("Download saved project ZIP")
+            icon.source: "image://theme/icon-splus-downloads"
+            visible: !page.editorActionsInMore
+            enabled: !page.offline && !overleafClient.archiveBusy
+            onClicked: overleafClient.downloadProjectArchive(page.projectId)
+        }
+        AppBarButton {
+            objectName: "openCachedPdf"
+            context: qsTr("Open PDF in another app")
+            icon.source: "image://theme/icon-m-file-pdf"
+            visible: !page.editorActionsInMore
+            enabled: overleafClient.pdfPath.length > 0 && !overleafClient.pdfBusy
+            onClicked: externalPdf.open()
+        }
+        AppBarButton {
+            objectName: "editorSearch"
+            context: qsTr("Find and replace")
+            icon.source: "image://theme/icon-m-search"
+            visible: !page.editorActionsInMore
+            onClicked: {
+                page.searchVisible = true
+                searchInput.forceActiveFocus()
+            }
+        }
+        AppBarButton {
+            objectName: "projectChat"
+            context: qsTr("Chat")
+            icon.source: "image://theme/icon-m-chat"
+            layoutDirection: Qt.LeftToRight
+            visible: !page.offline && !page.editorActionsInMore
+            onClicked: pageStack.push(Qt.resolvedUrl("ProjectCollaborationPage.qml"), {
+                "projectId": page.projectId, "mode": "chat"
+            })
+        }
+        AppBarButton {
+            objectName: "projectHistory"
+            context: qsTr("History")
+            icon.source: "image://theme/icon-m-clock"
+            layoutDirection: Qt.LeftToRight
+            visible: !page.offline && !page.editorActionsInMore
+            onClicked: pageStack.push(Qt.resolvedUrl("ProjectCollaborationPage.qml"), {
+                "projectId": page.projectId, "mode": "history", "editorPage": page
+            })
+        }
+        AppBarButton {
+            objectName: "projectSharing"
+            context: qsTr("Access")
+            icon.source: "image://theme/icon-m-share"
+            layoutDirection: Qt.LeftToRight
+            visible: !page.offline && !page.editorActionsInMore
+            onClicked: pageStack.push(Qt.resolvedUrl("ProjectCollaborationPage.qml"), {
+                "projectId": page.projectId, "mode": "share"
+            })
+        }
+        AppBarButton {
+            objectName: "projectComments"
+            context: overleafClient.commentsAvailable ? qsTr("Comments") : qsTr("Comments unavailable")
+            icon.source: Qt.resolvedUrl("../icons/comments.png")
+            layoutDirection: Qt.LeftToRight
+            visible: !page.offline && !page.editorActionsInMore
+            enabled: overleafClient.commentsAvailable
+            onClicked: pageStack.push(Qt.resolvedUrl("ProjectCollaborationPage.qml"), {
+                "projectId": page.projectId, "mode": "comments"
+            })
+        }
+        AppBarButton {
+            objectName: "editorReverso"
+            Image {
+                objectName: "editorReversoIcon"
+                anchors.centerIn: parent
+                width: Theme.iconSizeSmallPlus
+                height: width
+                fillMode: Image.PreserveAspectFit
+                source: Qt.resolvedUrl("../icons/translate.png")
+                opacity: parent.enabled ? 1 : Theme.opacityLow
+            }
+            context: qsTr("Reverso")
+            enabled: page.status === PageStatus.Active
+            onClicked: page.openReverso()
+        }
+        AppBarButton {
+            objectName: "editorWolframAlpha"
+            context: qsTr("WolframAlpha")
+            preferredWidth: Theme.dp(72)
+            Image {
+                objectName: "editorWolframAlphaIcon"
+                anchors.centerIn: parent
+                width: Theme.iconSizeSmallPlus
+                height: width
+                fillMode: Image.PreserveAspectFit
+                source: Qt.resolvedUrl(Theme.colorScheme === Theme.LightOnDark
+                                       ? "../icons/rheniumbeta-dark.png" : "../icons/rheniumbeta-light.png")
+                opacity: parent.enabled ? 1 : Theme.opacityLow
+            }
+            enabled: page.status === PageStatus.Active
+            onClicked: page.openWolframInput()
+        }
+        AppBarButton {
+            objectName: "editorSciHub"
+            context: qsTr("Sci-Hub")
+            Image {
+                objectName: "editorSciHubIcon"
+                anchors.centerIn: parent
+                width: Theme.iconSizeSmallPlus
+                height: width
+                fillMode: Image.PreserveAspectFit
+                source: Qt.resolvedUrl(Theme.colorScheme === Theme.LightOnDark
+                                       ? "../icons/scihub-light.png" : "../icons/scihub.png")
+                opacity: parent.enabled ? 1 : Theme.opacityLow
+            }
+            enabled: page.status === PageStatus.Active
+            onClicked: {
+                page.closeWolframResult()
+                page.closeWolframInput()
+                reversoPopup.close()
+                aiGeneratorPopup.close()
+                page.clearAiCompletion()
+                sciHubPopup.visible = true
+                sciHubInput.forceActiveFocus()
+            }
+        }
+        AppBarButton {
+            objectName: "editorAiAssistant"
+            context: qsTr("Generate with AI")
+            icon.source: Qt.resolvedUrl("../icons/ai.png")
+            layoutDirection: Qt.LeftToRight
+            visible: page.aiEnabled && !page.editorActionsInMore
+            onClicked: page.openAiGenerator()
+        }
+        AppBarButton {
+            objectName: "editorKeyboardShortcuts"
+            context: qsTr("Keyboard shortcuts")
+            icon.source: "image://theme/icon-m-keyboard"
+            visible: !page.editorActionsInMore
+            onClicked: shortcutsPopup.open()
+
+            PopupMenu {
+                id: shortcutsPopup
+                objectName: "editorShortcutsPopup"
+                preferredWidth: Math.min(page.width - 2 * Theme.horizontalPageMargin, Theme.dp(420))
+                headerBackground: PopupMenuHeader.SolidBackground
+                headerText: qsTr("Keyboard shortcuts")
+
+                Item {
+                    width: parent.width
+                    height: shortcutList.implicitHeight + 2 * Theme.paddingMedium
+
+                    Label {
+                        id: shortcutList
+                        objectName: "editorShortcutList"
+                        anchors {
+                            top: parent.top
+                            left: parent.left
+                            right: parent.right
+                            margins: Theme.paddingMedium
+                        }
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: Theme.fontSizeSmall
+                        text: page.keyboardShortcutHintText
+                    }
+                }
+            }
+        }
+        AppBarButton {
+            objectName: "editorSettings"
+            context: qsTr("Settings")
+            icon.source: "image://theme/icon-splus-setting"
+            visible: !page.editorActionsInMore
+            onClicked: pageStack.push(Qt.resolvedUrl("SettingsPage.qml"))
+        }
+    }
+
+    Item {
+        id: headerPane
+        objectName: "editorContent"
+        anchors.top: editorAppBarScroller.bottom
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        clip: true
+        MouseArea {
+            objectName: "utilityPopupDismissArea"
+            anchors.fill: parent
+            z: 19
+            enabled: page.utilityPopupOpen && !page.wolframVisible
+            onClicked: page.dismissUtilityPopups()
+        }
         Rectangle {
-            id: header
-            objectName: "editorHeaderBackground"
-            width: headerPane.width
-            height: Theme.itemSizeExtraSmall
+            id: sciHubPopup
+            objectName: "sciHubPopup"
+            readonly property real hatOverhang: Math.min(parent.width / 4, Theme.itemSizeMedium * 1.15)
+            anchors.top: parent.top
+            anchors.right: parent.right
+            z: 23
+            width: Math.max(0, Math.min(parent.width - hatOverhang, Theme.itemSizeLarge * 5))
+            height: Math.max(0, Math.min(parent.height, sciHubContent.height + 2 * Theme.paddingLarge))
+            visible: false
             color: page.editorBackground
+            border.color: editor.color
+            radius: Theme.paddingLarge
+            MouseArea { anchors.fill: parent }
+            Image {
+                id: sciHubHat
+                objectName: "sciHubHat"
+                parent: page
+                readonly property real baseX: -Math.min(Math.max(0, width - Theme.paddingLarge - Theme.paddingSmall),
+                                                        sciHubPopup.hatOverhang)
+                x: headerPane.x + sciHubPopup.x + baseX + sciHubHatMetrics.advanceWidth("Sci")
+                y: headerPane.y + sciHubPopup.y - height * 0.62 - sciHubHatMetrics.height / 3
+                z: Theme.ZOrderHeader + 2
+                visible: sciHubPopup.visible
+                width: Math.min(sciHubPopup.width / 3, Theme.itemSizeMedium * 1.5)
+                height: width * 178 / 224
+                fillMode: Image.PreserveAspectFit
+                source: Qt.resolvedUrl("../icons/scihub-hat.png")
+                FontMetrics {
+                    id: sciHubHatMetrics
+                    font: sciHubTitle.font
+                }
+            }
+            SilicaFlickable {
+                anchors.fill: parent
+                anchors.margins: Theme.paddingLarge
+                contentHeight: sciHubContent.height
+                clip: true
+                Column {
+                    id: sciHubContent
+                    width: parent.width
+                    Row {
+                        width: parent.width
+                        Label {
+                            id: sciHubTitle
+                            objectName: "sciHubTitle"
+                            width: parent.width
+                            height: Theme.itemSizeSmall
+                            verticalAlignment: Text.AlignVCenter
+                            text: qsTr("Sci-Hub")
+                            color: editor.color
+                        }
+                    }
+                    Item {
+                        width: parent.width
+                        height: Math.max(sciHubInput.y + sciHubInput.height,
+                                         sciHubSearch.y + sciHubSearch.height)
+                        TextField {
+                            id: sciHubInput
+                            objectName: "sciHubInput"
+                            anchors.left: parent.left
+                            anchors.right: sciHubSearch.left
+                            anchors.rightMargin: Theme.paddingSmall
+                            y: Math.max(0, sciHubSearch.height / 2
+                                - sciHubInput._editor.mapToItem(sciHubInput, 0,
+                                    sciHubInput._editor.height / 2).y)
+                            label: qsTr("DOI or article URL")
+                            EnterKey.onClicked: if (sciHubInput.text.trim().length) page.openSciHubSearch()
+                        }
+                        Rectangle {
+                            id: sciHubSearch
+                            objectName: "sciHubSearch"
+                            anchors.right: parent.right
+                            y: Math.max(0, sciHubInput._editor.mapToItem(parent, 0,
+                                sciHubInput._editor.height / 2).y - height / 2)
+                            width: Math.min(parent.width * 0.3, Theme.itemSizeLarge)
+                            height: width
+                            radius: width / 2
+                            color: "#cd181b"
+                            border.color: "white"
+                            border.width: Math.max(2, Theme.paddingSmall / 2)
+                            enabled: sciHubInput.text.trim().length > 0
+                            opacity: enabled ? 1 : Theme.opacityLow
+                            activeFocusOnTab: true
+                            Accessible.role: Accessible.Button
+                            Accessible.name: qsTr("Open")
+                            Keys.onReturnPressed: page.openSciHubSearch()
+                            Keys.onEnterPressed: page.openSciHubSearch()
+                            Text {
+                                anchors.centerIn: parent
+                                color: "white"
+                                text: "гоп"
+                                font.bold: true
+                                font.pixelSize: Theme.fontSizeLarge
+                            }
+                            MouseArea { anchors.fill: parent; onClicked: page.openSciHubSearch() }
+                        }
+                    }
+                    Label {
+                        id: sciHubError
+                        width: parent.width
+                        visible: text.length > 0
+                        color: Theme.errorColor
+                        wrapMode: Text.Wrap
+                    }
+                }
+            }
+        }
+        AiAssistantPopup {
+            id: aiGeneratorPopup
+            anchors.top: parent.top
+            anchors.right: parent.right
+            z: 22
+            client: aiGeneratorClient
+            editorPage: page
+            textColor: editor.color
+            backgroundColor: page.editorBackground
+        }
+        ReversoPopup {
+            id: reversoPopup
+            property point editorOrigin: {
+                var paneX = panes.x
+                var paneY = panes.y
+                var codeX = codePane.x
+                var codeY = codePane.y
+                return codePane.mapToItem(headerPane, 0, 0)
+            }
+            property point cursorPoint: completionPopup.cursorPoint
+            property real cursorTop: Math.max(0, Math.min(codePane.height, cursorPoint.y))
+            property real cursorBottom: Math.max(0, Math.min(codePane.height,
+                cursorPoint.y + editor._editor.cursorRectangle.height))
+            property real spaceAbove: cursorTop
+            property real spaceBelow: codePane.height - cursorBottom
+            property bool placeBelow: spaceBelow >= preferredHeight || spaceBelow >= spaceAbove
+            maximumWidth: reverseDirection ? codePane.width : headerPane.width
+            maximumHeight: reverseDirection ? (placeBelow ? spaceBelow : spaceAbove) : headerPane.height
+            x: reverseDirection
+               ? editorOrigin.x + Math.max(0, Math.min(codePane.width - width, cursorPoint.x))
+               : headerPane.width - width
+            y: reverseDirection
+               ? editorOrigin.y + (placeBelow ? cursorBottom : cursorTop - height)
+               : 0
+            z: 21
+            textColor: editor.color
+            backgroundColor: page.editorBackground
+        }
+        Rectangle {
+            id: wolframInputPopup
+            objectName: "wolframAlphaInputPopup"
+            anchors.top: parent.top
+            anchors.right: parent.right
+            width: Math.min(parent.width, Theme.itemSizeLarge * 5)
+            height: Math.min(parent.height, Theme.itemSizeLarge * 4,
+                             wolframInputContents.height + 2 * Theme.paddingLarge)
+            visible: page.wolframInputVisible
+            z: 20
+            color: "#303030"
+            radius: Theme.paddingLarge
+            MouseArea { anchors.fill: parent }
+            SilicaFlickable {
+                anchors.fill: parent
+                anchors.margins: Theme.paddingLarge
+                contentHeight: wolframInputContents.height
+                clip: true
+                Column {
+                    id: wolframInputContents
+                    width: parent.width
+                    Rectangle {
+                        objectName: "wolframAlphaInputFrame"
+                        width: parent.width
+                        height: Theme.itemSizeLarge
+                        color: "#303030"
+                        radius: Theme.paddingLarge
+                        border.color: "#ffad32"
+                        border.width: Math.max(2, Theme.paddingSmall / 2)
+                        TextInput {
+                            id: wolframInput
+                            objectName: "wolframAlphaInput"
+                            anchors.left: parent.left
+                            anchors.leftMargin: Theme.paddingLarge
+                            anchors.right: wolframSubmit.left
+                            anchors.rightMargin: Theme.paddingSmall
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: "white"
+                            selectionColor: "#ffad32"
+                            selectedTextColor: "#303030"
+                            font.pixelSize: Theme.fontSizeMedium
+                            clip: true
+                            readOnly: wolframClient.busy
+                            selectByMouse: true
+                            onAccepted: page.submitWolframInput()
+                            Text {
+                                anchors.fill: parent
+                                visible: !wolframInput.text.length
+                                text: qsTr("Enter what you want to calculate or know about")
+                                color: "#bdbdbd"
+                                font.family: wolframInput.font.family
+                                font.pixelSize: wolframInput.font.pixelSize
+                                font.italic: true
+                                elide: Text.ElideRight
+                            }
+                        }
+                        Rectangle {
+                            id: wolframSubmit
+                            anchors.right: parent.right
+                            anchors.rightMargin: Theme.paddingSmall
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Theme.itemSizeSmall
+                            height: width
+                            radius: Theme.paddingMedium
+                            color: "#ff9f20"
+                            opacity: wolframClient.busy ? Theme.opacityLow : 1
+                            Text {
+                                anchors.centerIn: parent
+                                text: "="
+                                color: "#303030"
+                                font.bold: true
+                                font.pixelSize: Theme.fontSizeLarge
+                            }
+                            MouseArea {
+                                objectName: "wolframAlphaSubmit"
+                                anchors.fill: parent
+                                enabled: !wolframClient.busy
+                                onClicked: page.submitWolframInput()
+                            }
+                        }
+                    }
+                    Text {
+                        objectName: "wolframAlphaInputResult"
+                        width: parent.width
+                        visible: page.wolframInputSubmitted
+                        wrapMode: Text.Wrap
+                        textFormat: Text.PlainText
+                        color: wolframClient.error.length ? Theme.errorColor : "white"
+                        font.pixelSize: Theme.fontSizeSmall
+                        text: wolframClient.error.length ? wolframClient.error
+                              : wolframClient.busy ? qsTr("Waiting for WolframAlpha…")
+                              : wolframClient.result
+                    }
+                }
+                VerticalScrollDecorator {}
+            }
         }
         Item {
             id: panes
             objectName: "editorPanes"
-            anchors.top: header.bottom
+            anchors.top: parent.top
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.bottom: parent.bottom
-            property bool sideBySide: page.largeScreen && width > height
+            property bool sideBySide: page.wideTablet
             onSideBySideChanged: pdfNavigationTimer.restart()
 
+            MouseArea {
+                anchors.fill: parent
+                z: 4.5
+                enabled: page.wolframVisible
+                onClicked: page.dismissUtilityPopups()
+            }
             SilicaFlickable {
                 id: codePane
                 objectName: "editorCodePane"
@@ -1302,6 +2037,9 @@ Page {
                         Binding { target: editor._editor; property: "persistentSelection"; value: true }
                         Binding { target: editor._editor; property: "readOnly"; value: page.offline }
                         onTextChanged: {
+                            page.closeWolframResult()
+                            if (reversoPopup.showing && reversoPopup.reverseDirection)
+                                reversoPopup.close()
                             if (page.initialized) {
                                 page.clearAiCompletion()
                                 page.dirty = true
@@ -1353,7 +2091,8 @@ Page {
                             z: 3
                             color: page.editorBackground
                             border.color: editor.color
-                            visible: editor._editor.activeFocus
+                            radius: Theme.paddingLarge
+                            visible: !page.wolframVisible && editor._editor.activeFocus
                                      && (page.aiCompletionError.length > 0 || !!page.latexSuggestion || page.aiSuggestion.length > 0)
                                      && (page.aiCompletionError.length > 0 || !completionHint.visible)
                             Text {
@@ -1430,12 +2169,17 @@ Page {
                 WheelScroll {
                     objectName: "editorCodeWheel"
                     parent: codePane
-                    flickable: codePane
+                    flickable: page.wheelTarget === "pdf" && pdfPane.visible && pdfLoader.item
+                               ? pdfLoader.item.wheelFlickable : codePane
                     controlWheelZoom: true
                     trackPointer: true
-                    onPointerEntered: page.zoomTarget = "editor"
-                    onZoomRequested: {
+                    onPointerEntered: {
+                        page.wheelTarget = "editor"
                         page.zoomTarget = "editor"
+                    }
+                    onZoomRequested: {
+                        page.zoomTarget = page.wheelTarget === "pdf" && pdfPane.visible && pdfLoader.item
+                                          ? "pdf" : "editor"
                         page.adjustZoom(direction)
                     }
                 }
@@ -1456,6 +2200,47 @@ Page {
                              && cursorPoint.y < codePane.height
                     indeterminate: true
                     z: 4
+                }
+                Rectangle {
+                    id: wolframPopup
+                    objectName: "wolframAlphaPopup"
+                    parent: panes
+                    property point cursorPoint: completionPopup.cursorPoint
+                    x: codePane.x + Math.max(0, Math.min(codePane.width - width, cursorPoint.x))
+                    y: codePane.y + Math.max(0, Math.min(codePane.height - height,
+                        cursorPoint.y + editor._editor.cursorRectangle.height + height <= codePane.height
+                        ? cursorPoint.y + editor._editor.cursorRectangle.height : cursorPoint.y - height))
+                    width: Math.min(codePane.width, Theme.itemSizeLarge * 4)
+                    height: Math.min(codePane.height, wolframText.implicitHeight + 2 * Theme.paddingLarge)
+                    visible: page.wolframVisible
+                    z: 5
+                    color: page.editorBackground
+                    border.color: editor.color
+                    radius: Theme.paddingLarge
+                    MouseArea { anchors.fill: parent }
+                    Column {
+                        anchors.fill: parent
+                        anchors.margins: Theme.paddingLarge
+                        SilicaFlickable {
+                            width: parent.width
+                            height: parent.height
+                            contentHeight: wolframText.height
+                            clip: true
+                            Text {
+                                id: wolframText
+                                objectName: "wolframAlphaPopupText"
+                                width: parent.width
+                                wrapMode: Text.Wrap
+                                textFormat: Text.PlainText
+                                color: wolframClient.error.length ? Theme.errorColor : editor.color
+                                font.pixelSize: Theme.fontSizeSmall
+                                text: wolframClient.error.length ? wolframClient.error
+                                      : wolframClient.busy ? qsTr("Waiting for WolframAlpha…")
+                                      : wolframClient.result
+                            }
+                            VerticalScrollDecorator {}
+                        }
+                    }
                 }
                 Rectangle {
                     objectName: "sourceLoadingIndicator"
@@ -1679,20 +2464,22 @@ Page {
                             PdfDocument { id: pdfDocument }
                         }
                     }
-                    MouseArea {
+                    WheelScroll {
                         objectName: "pdfZoomWheel"
                         anchors.fill: parent
                         z: 2
-                        acceptedButtons: Qt.NoButton
-                        onWheel: {
-                            var delta = wheel.pixelDelta.y !== 0 ? wheel.pixelDelta.y : wheel.angleDelta.y
-                            if (!(wheel.modifiers & Qt.ControlModifier) || delta === 0 || !pdfLoader.item) {
-                                wheel.accepted = false
-                                return
-                            }
+                        enabled: !!pdfLoader.item
+                        flickable: page.wheelTarget === "editor" ? codePane
+                                   : pdfLoader.item ? pdfLoader.item.wheelFlickable : null
+                        controlWheelZoom: true
+                        trackPointer: true
+                        onPointerEntered: {
+                            page.wheelTarget = "pdf"
                             page.zoomTarget = "pdf"
-                            page.adjustZoom(delta > 0 ? 1 : -1)
-                            wheel.accepted = true
+                        }
+                        onZoomRequested: {
+                            page.zoomTarget = page.wheelTarget
+                            page.adjustZoom(direction)
                         }
                     }
                 }
@@ -1702,6 +2489,7 @@ Page {
                     text: qsTr("Save and compile")
                     enabled: !page.offline && !overleafClient.sourceBusy && !overleafClient.pdfBusy
                     visible: overleafClient.pdfPath.length === 0 && !page.compileInProgress
+                             && !page.editorActionsInMore
                     onClicked: page.saveAndCompile()
                 }
                 Rectangle {

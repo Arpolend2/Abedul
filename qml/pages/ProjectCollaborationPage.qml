@@ -1,33 +1,57 @@
 import QtQuick 2.0
 import Sailfish.Silica 1.0
+import Aurora.Controls 1.0
 
 Page {
     id: page
     allowedOrientations: Orientation.All
     property string projectId
     property string mode: "chat"
+    property var editorPage
     property string selectedThread: ""
+    property bool pullRefreshPending: false
     readonly property var collaborationClient: overleafClient.collaboration
 
+    function openHistoryTarget(target) {
+        if (editorPage && editorPage.openHistoryLocation(target))
+            pageStack.pop(editorPage)
+    }
+
+    function refreshFromPull() {
+        if (pullRefreshPending || collaborationClient.busy) {
+            flick.PullToRefresh.refreshCompleted(false)
+            return
+        }
+        collaborationClient.refresh()
+        pullRefreshPending = true
+        refreshStartTimer.restart()
+    }
+    function finishPullRefresh() {
+        if (pullRefreshPending && !collaborationClient.busy) {
+            pullRefreshPending = false
+            flick.PullToRefresh.refreshCompleted(collaborationClient.error.length === 0)
+        }
+    }
+    Timer {
+        id: refreshStartTimer
+        interval: 0
+        onTriggered: page.finishPullRefresh()
+    }
     Component.onCompleted: collaborationClient.open(projectId, mode)
     Component.onDestruction: collaborationClient.close()
     Connections {
         target: collaborationClient
         onSubmitted: input.text = ""
+        onChanged: page.finishPullRefresh()
     }
-
     SilicaListView {
         id: flick
         objectName: "collaborationList"
         anchors.fill: parent
+        PullToRefresh.enabled: !collaborationClient.busy
+        PullToRefresh.description: qsTr("Pull down to refresh")
+        PullToRefresh.refreshHandler: function() { page.refreshFromPull() }
         model: collaborationClient.entriesModel
-        PullDownMenu {
-            MenuItem {
-                text: qsTr("Refresh")
-                enabled: !collaborationClient.busy
-                onClicked: collaborationClient.refresh()
-            }
-        }
         header: Column {
             width: flick.width
             spacing: Theme.paddingMedium
@@ -56,6 +80,14 @@ Page {
             Label {
                 x: Theme.horizontalPageMargin
                 width: parent.width - 2 * x
+                wrapMode: Text.Wrap
+                color: Theme.highlightColor
+                visible: !!collaborationClient.notice
+                text: collaborationClient.notice || ""
+            }
+            Label {
+                x: Theme.horizontalPageMargin
+                width: parent.width - 2 * x
                 visible: collaborationClient.busy
                 text: qsTr("Loading…")
             }
@@ -77,8 +109,14 @@ Page {
             height: (page.mode === "share" ? memberDetails.height
                      : page.mode === "history" ? Math.max(rowText.implicitHeight, historyChanges.height)
                      : rowText.implicitHeight) + 2 * Theme.paddingMedium
-            enabled: page.mode === "comments"
-            onClicked: page.selectedThread = entryData.target
+            enabled: page.mode === "comments" || page.mode === "share" || page.mode === "history"
+            onClicked: {
+                if (page.mode === "comments")
+                    page.selectedThread = entryData.target
+                else if (page.mode === "history" && page.editorPage
+                         && entryData.navigation && entryData.navigation.length === 1)
+                    page.openHistoryTarget(entryData.navigation[0])
+            }
             Label {
                 id: rowText
                 x: Theme.horizontalPageMargin
@@ -145,9 +183,19 @@ Page {
                     font.pixelSize: Theme.fontSizeSmall
                     wrapMode: Text.Wrap
                 }
+                Repeater {
+                    model: page.mode === "history" && entryData.navigation && entryData.navigation.length > 1
+                           ? entryData.navigation : []
+                    delegate: Button {
+                        width: historyChanges.width
+                        text: modelData.path
+                        onClicked: page.openHistoryTarget(modelData)
+                    }
+                }
             }
             Column {
                 id: memberDetails
+                property bool confirmingRemoval: false
                 x: Theme.horizontalPageMargin
                 y: Theme.paddingMedium
                 width: parent.width - 2 * x
@@ -172,10 +220,56 @@ Page {
                 Label {
                     objectName: "collaboratorAccess"
                     width: parent.width
-                    text: entryData.access || ""
+                    text: (entryData.access || "") + (entryData.kind === "invite" ? " · " + qsTr("Pending invitation") : "")
                     color: Theme.highlightColor
                     font.pixelSize: Theme.fontSizeSmall
                     wrapMode: Text.Wrap
+                }
+                Button {
+                    objectName: "changeCollaboratorAccess"
+                    width: Math.min(parent.width, Theme.buttonWidthLarge)
+                    visible: !!entryData.id && entryData.kind === "member"
+                             && (entryData.privilege === "readOnly" || entryData.privilege === "readAndWrite")
+                             && !memberDetails.confirmingRemoval
+                    enabled: !collaborationClient.busy
+                    text: entryData.privilege === "readOnly" ? qsTr("Allow editing") : qsTr("Make read-only")
+                    onClicked: collaborationClient.changeAccess(entryData.id, entryData.privilege !== "readOnly")
+                }
+                Button {
+                    objectName: "resendInvitation"
+                    width: Math.min(parent.width, Theme.buttonWidthLarge)
+                    visible: !!entryData.id && entryData.kind === "invite" && !memberDetails.confirmingRemoval
+                    enabled: !collaborationClient.busy
+                    text: qsTr("Resend invitation")
+                    onClicked: collaborationClient.resendInvite(entryData.id)
+                }
+                Button {
+                    objectName: "removeCollaborator"
+                    width: Math.min(parent.width, Theme.buttonWidthLarge)
+                    visible: !!entryData.id && entryData.privilege !== "owner" && !memberDetails.confirmingRemoval
+                    enabled: !collaborationClient.busy
+                    text: entryData.kind === "invite" ? qsTr("Revoke invitation") : qsTr("Remove access")
+                    onClicked: memberDetails.confirmingRemoval = true
+                }
+                Button {
+                    objectName: "confirmRemoveCollaborator"
+                    width: Math.min(parent.width, Theme.buttonWidthLarge)
+                    visible: memberDetails.confirmingRemoval
+                    enabled: !collaborationClient.busy
+                    text: entryData.kind === "invite" ? qsTr("Confirm revoke") : qsTr("Confirm removal")
+                    onClicked: {
+                        memberDetails.confirmingRemoval = false
+                        if (entryData.kind === "invite")
+                            collaborationClient.revokeInvite(entryData.id)
+                        else
+                            collaborationClient.removeMember(entryData.id)
+                    }
+                }
+                Button {
+                    width: Math.min(parent.width, Theme.buttonWidthLarge)
+                    visible: memberDetails.confirmingRemoval
+                    text: qsTr("Cancel")
+                    onClicked: memberDetails.confirmingRemoval = false
                 }
             }
         }

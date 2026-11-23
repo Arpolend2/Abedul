@@ -22,6 +22,7 @@ Rectangle {
     property alias status: pdfView.status
     property alias contentX: viewFlick.contentX
     property alias contentY: viewFlick.contentY
+    property alias wheelFlickable: viewFlick
     property alias bookmarksModel: pdfView.bookmarksModel
     property alias searchPhraseModel: pdfView.searchPhraseModel
     property alias fileVersion: pdfView.fileVersion
@@ -452,6 +453,7 @@ Rectangle {
 
         SilicaFlickable {
             id: viewFlick
+            objectName: "pdfContentFlickable"
 
             property var fixedScaleValues: isPagedView ? [1.0, 1.5, 2] : [0.5, 1.0, 1.5, 2]
             property real maximumItemScale: fixedScaleValues[fixedScaleValues.length - 1]

@@ -43,6 +43,7 @@ class OverleafClient : public QObject
     Q_PROPERTY(bool sourceBusy READ sourceBusy NOTIFY sourceBusyChanged)
     Q_PROPERTY(bool pdfOnLeft READ pdfOnLeft WRITE setPdfOnLeft NOTIFY pdfOnLeftChanged)
     Q_PROPERTY(int editorFontScale READ editorFontScale WRITE setEditorFontScale NOTIFY editorFontScaleChanged)
+    Q_PROPERTY(QString sciHubAddress READ sciHubAddress NOTIFY sciHubAddressChanged)
     Q_PROPERTY(int completionHintCount READ completionHintCount NOTIFY completionHintCountChanged)
     Q_PROPERTY(QObject *collaboration READ collaboration CONSTANT)
     Q_PROPERTY(bool projectCreationBusy READ projectCreationBusy NOTIFY projectCreationChanged)
@@ -87,6 +88,9 @@ public:
     void setPdfOnLeft(bool enabled);
     int editorFontScale() const;
     void setEditorFontScale(int percent);
+    QString sciHubAddress() const;
+    Q_INVOKABLE bool setSciHubAddress(const QString &address);
+    Q_INVOKABLE QUrl sciHubSearchUrl(const QString &query) const;
     int completionHintCount() const;
     Q_INVOKABLE void recordCompletionHintShown();
     QObject *collaboration() const;
@@ -177,6 +181,7 @@ signals:
     void projectFileOverwriteRequested(const QString &path, const QString &type, const QString &entityId);
     void pdfOnLeftChanged();
     void editorFontScaleChanged();
+    void sciHubAddressChanged();
     void completionHintCountChanged();
     void projectCreationChanged();
     void projectActionChanged();
@@ -287,6 +292,7 @@ private:
     bool m_sourceBusy = false;
     bool m_pdfOnLeft = false;
     int m_editorFontScale = 100;
+    QString m_sciHubAddress;
     int m_completionHintCount = 0;
     quint64 m_sourceGeneration = 0;
     QPointer<QNetworkReply> m_sourceReply;

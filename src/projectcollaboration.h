@@ -47,6 +47,10 @@ public:
     Q_INVOKABLE void open(const QString &projectId, const QString &mode);
     Q_INVOKABLE void refresh();
     Q_INVOKABLE void submit(const QString &text, const QString &target, bool readOnly);
+    Q_INVOKABLE void changeAccess(const QString &id, bool readOnly);
+    Q_INVOKABLE void removeMember(const QString &id);
+    Q_INVOKABLE void revokeInvite(const QString &id);
+    Q_INVOKABLE void resendInvite(const QString &id);
     Q_INVOKABLE void close();
 signals:
     void changed();
@@ -54,7 +58,9 @@ signals:
 private:
     typedef std::function<void(const QByteArray &)> Handler;
     void request(const QString &path, const QByteArray &body, const Handler &handler,
-                 const QByteArray &csrf = QByteArray());
+                 const QByteArray &csrf = QByteArray(), const QByteArray &method = QByteArray());
+    void manageSharing(const QString &id, const QString &kind, const QByteArray &method,
+                       const QByteArray &body = QByteArray());
     void fail(const QString &message);
     bool validSession() const;
     bool validId(const QString &id) const;

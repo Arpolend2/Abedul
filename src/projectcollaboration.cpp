@@ -132,7 +132,7 @@ void ProjectCollaboration::fail(const QString &message)
 }
 
 void ProjectCollaboration::request(const QString &path, const QByteArray &body,
-                                   const Handler &handler, const QByteArray &csrf)
+                                   const Handler &handler, const QByteArray &csrf, const QByteArray &method)
 {
     if (!validSession()) {
         fail(tr("The session changed. Reopen this page."));
@@ -146,16 +146,21 @@ void ProjectCollaboration::request(const QString &path, const QByteArray &body,
     req.setAttribute(QNetworkRequest::CookieSaveControlAttribute, QNetworkRequest::Manual);
     req.setAttribute(QNetworkRequest::FollowRedirectsAttribute, false);
     QNetworkReply *reply;
-    if (body.isNull()) {
+    if (method.isEmpty() && body.isNull()) {
         reply = m_network->get(req);
     } else {
         req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
         req.setRawHeader("X-CSRF-Token", csrf);
-        reply = m_network->post(req, body);
+        if (method == "PUT")
+            reply = m_network->put(req, body);
+        else if (method == "DELETE")
+            reply = m_network->deleteResource(req);
+        else
+            reply = m_network->post(req, body);
     }
     m_reply = reply;
     QTimer::singleShot(30000, reply, [reply]() { if (reply->isRunning()) reply->abort(); });
-    connect(reply, &QNetworkReply::finished, this, [this, reply, generation, handler, body]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, generation, handler, body, method]() {
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const bool redirected = reply->attribute(QNetworkRequest::RedirectionTargetAttribute).isValid();
         const bool ok = !redirected && status >= 200 && status < 300
@@ -179,7 +184,7 @@ void ProjectCollaboration::request(const QString &path, const QByteArray &body,
                                      : tr("Network request failed: %1").arg(networkError);
             if (redirected) msg = tr("Server redirected the request. Sign in again.");
             if (!detail.isEmpty()) msg += QLatin1Char(' ') + detail;
-            if (!body.isNull() && status == 0)
+            if ((!body.isNull() || !method.isEmpty()) && status == 0)
                 msg += QLatin1Char(' ') + tr("The server may have received the request; check before retrying.");
             fail(msg);
             return;
@@ -193,7 +198,7 @@ void ProjectCollaboration::refresh()
     if (m_busy) return;
     if (!validId(m_project) || !validSession()) { fail(tr("The session changed. Reopen this page.")); return; }
     cancelHistoryDiffs();
-    m_busy = true; m_error.clear(); m_notice.clear(); emit changed();
+    m_busy = true; m_error.clear(); emit changed();
     QString endpoint;
     if (m_mode == QStringLiteral("share")) endpoint = QStringLiteral("/members");
     if (m_mode == QStringLiteral("history")) endpoint = QStringLiteral("/updates?min_count=50");
@@ -227,10 +232,15 @@ void ProjectCollaboration::parseEntries(const QByteArray &data)
             if (privilege.isEmpty())
                 privilege = member.value(QStringLiteral("privilegeLevel")).toString();
             const QJsonObject user = member.value(QStringLiteral("user")).toObject();
+            QString id = user.value(QStringLiteral("_id")).toString();
+            if (id.isEmpty()) id = member.value(QStringLiteral("_id")).toString();
             QString email = member.value(QStringLiteral("email")).toString();
             if (email.isEmpty()) email = user.value(QStringLiteral("email")).toString();
             entry[QStringLiteral("name")] = name.isEmpty() ? tr("Unknown collaborator") : name;
             entry[QStringLiteral("email")] = email == name ? QString() : email;
+            entry[QStringLiteral("id")] = validId(id) ? id : QString();
+            entry[QStringLiteral("kind")] = QStringLiteral("member");
+            entry[QStringLiteral("privilege")] = privilege;
             entry[QStringLiteral("access")] = privilege == QStringLiteral("readAndWrite") ? tr("Can edit")
                     : privilege == QStringLiteral("readOnly") ? tr("Can view")
                     : privilege == QStringLiteral("owner") ? tr("Owner") : tr("Access not specified");
@@ -279,6 +289,23 @@ void ProjectCollaboration::parseEntries(const QByteArray &data)
                     + tr("Versions %1–%2").arg(update.value(QStringLiteral("fromV")).toInt()).arg(update.value(QStringLiteral("toV")).toInt())
                     + (users.isEmpty() ? QString() : QLatin1Char('\n') + users.join(QStringLiteral(", ")));
             entry[QStringLiteral("changes")] = changes;
+            QVariantList navigation;
+            for (const QJsonValue &path : update.value(QStringLiteral("pathnames")).toArray()) {
+                if (path.isString() && !path.toString().isEmpty())
+                    navigation.append(QVariantMap{{QStringLiteral("path"), path.toString()}});
+            }
+            for (const QJsonValue &value : update.value(QStringLiteral("project_ops")).toArray()) {
+                const QJsonObject op = value.toObject();
+                const QString path = op.contains(QStringLiteral("rename"))
+                        ? op.value(QStringLiteral("rename")).toObject().value(QStringLiteral("newPathname")).toString()
+                        : op.value(QStringLiteral("add")).toObject().value(QStringLiteral("pathname")).toString();
+                bool exists = false;
+                for (const QVariant &target : navigation)
+                    exists = exists || target.toMap().value(QStringLiteral("path")).toString() == path;
+                if (!path.isEmpty() && !exists)
+                    navigation.append(QVariantMap{{QStringLiteral("path"), path}});
+            }
+            entry[QStringLiteral("navigation")] = navigation;
             const QJsonArray pathnames = update.value(QStringLiteral("pathnames")).toArray();
             bool validPaths = true;
             for (const QJsonValue &path : pathnames)
@@ -325,10 +352,98 @@ void ProjectCollaboration::parseEntries(const QByteArray &data)
         return;
     }
     m_entriesModel.reset(result);
+    if (m_mode == QStringLiteral("share")) {
+        request(QStringLiteral("/project/") + m_project + QStringLiteral("/invites"), QByteArray(),
+                [this](const QByteArray &data) {
+            QJsonParseError error;
+            const QJsonDocument doc = QJsonDocument::fromJson(data, &error);
+            if (error.error != QJsonParseError::NoError || !doc.isObject()
+                    || !doc.object().value(QStringLiteral("invites")).isArray()) {
+                fail(tr("The server returned an unsupported response."));
+                return;
+            }
+            QVariantList entries = m_entriesModel.entries();
+            for (const QJsonValue &item : doc.object().value(QStringLiteral("invites")).toArray()) {
+                const QJsonObject invite = item.toObject();
+                const QString id = invite.value(QStringLiteral("_id")).toString();
+                const QString privilege = invite.value(QStringLiteral("privileges")).toString();
+                const QString email = invite.value(QStringLiteral("email")).toString();
+                QVariantMap entry;
+                entry[QStringLiteral("id")] = validId(id) ? id : QString();
+                entry[QStringLiteral("kind")] = QStringLiteral("invite");
+                entry[QStringLiteral("privilege")] = privilege;
+                entry[QStringLiteral("name")] = email.isEmpty() ? tr("Unknown collaborator") : email;
+                entry[QStringLiteral("access")] = privilege == QStringLiteral("readAndWrite") ? tr("Can edit")
+                        : privilege == QStringLiteral("readOnly") ? tr("Can view") : tr("Access not specified");
+                entries.append(entry);
+            }
+            m_entriesModel.reset(entries);
+            m_busy = false;
+            emit changed();
+        });
+        return;
+    }
     m_busy = false;
     emit changed();
     if (m_mode == QStringLiteral("history"))
         fetchNextHistoryDiff();
+}
+
+void ProjectCollaboration::changeAccess(const QString &id, bool readOnly)
+{
+    const QJsonObject payload{{QStringLiteral("privilegeLevel"),
+                               readOnly ? QStringLiteral("readOnly") : QStringLiteral("readAndWrite")}};
+    manageSharing(id, QStringLiteral("member"), "PUT", QJsonDocument(payload).toJson(QJsonDocument::Compact));
+}
+
+void ProjectCollaboration::removeMember(const QString &id)
+{
+    manageSharing(id, QStringLiteral("member"), "DELETE");
+}
+
+void ProjectCollaboration::revokeInvite(const QString &id)
+{
+    manageSharing(id, QStringLiteral("invite"), "DELETE");
+}
+
+void ProjectCollaboration::resendInvite(const QString &id)
+{
+    manageSharing(id, QStringLiteral("invite"), "POST", QByteArray("{}"));
+}
+
+void ProjectCollaboration::manageSharing(const QString &id, const QString &kind, const QByteArray &method,
+                                         const QByteArray &body)
+{
+    if (m_busy) return;
+    if (!validSession() || !validId(m_project)) { fail(tr("The session changed. Reopen this page.")); return; }
+    if (m_mode != QStringLiteral("share") || !validId(id)) { fail(tr("Invalid collaborator or invitation.")); return; }
+    bool found = false;
+    for (const QVariant &item : m_entriesModel.entries()) {
+        const QVariantMap entry = item.toMap();
+        if (entry.value(QStringLiteral("id")).toString() == id
+                && entry.value(QStringLiteral("kind")).toString() == kind
+                && entry.value(QStringLiteral("privilege")).toString() != QStringLiteral("owner")) {
+            found = true;
+            break;
+        }
+    }
+    if (!found) { fail(tr("Invalid collaborator or invitation.")); return; }
+    m_busy = true; m_error.clear(); m_notice.clear(); emit changed();
+    const QString base = QStringLiteral("/project/") + m_project;
+    const QString path = base + (kind == QStringLiteral("member") ? QStringLiteral("/users/") : QStringLiteral("/invite/"))
+            + id + (method == "POST" ? QStringLiteral("/resend") : QString());
+    const QString notice = method == "PUT" ? tr("Access updated.")
+            : method == "POST" ? tr("Invitation sent again.")
+            : kind == QStringLiteral("invite") ? tr("Invitation revoked.") : tr("Access removed.");
+    request(base, QByteArray(), [this, path, body, method, notice](const QByteArray &html) {
+        const QByteArray csrf = extractCsrfToken(QString::fromUtf8(html)).toUtf8();
+        if (csrf.isEmpty()) { fail(tr("Could not obtain a CSRF token. Sign in again.")); return; }
+        request(path, body, [this, notice](const QByteArray &) {
+            m_busy = false;
+            m_notice = notice;
+            refresh();
+        }, csrf, method);
+    });
 }
 
 void ProjectCollaboration::cancelHistoryDiffs()
@@ -411,6 +526,27 @@ void ProjectCollaboration::fetchNextHistoryDiff()
                                          {QStringLiteral("text"), job.value(QStringLiteral("path"))}});
                 parts.append(fileParts);
             }
+        }
+        if (ok && parseError.error == QJsonParseError::NoError && diff.isArray()) {
+            QString inserted;
+            for (const QJsonValue &value : diff.toArray()) {
+                const QJsonObject chunk = value.toObject();
+                if (chunk.value(QStringLiteral("i")).isString()) {
+                    inserted = chunk.value(QStringLiteral("i")).toString();
+                    if (!inserted.trimmed().isEmpty())
+                        break;
+                }
+            }
+            QVariantList navigation = entry.value(QStringLiteral("navigation")).toList();
+            for (int i = 0; i < navigation.size(); ++i) {
+                QVariantMap target = navigation.at(i).toMap();
+                if (target.value(QStringLiteral("path")) == job.value(QStringLiteral("path"))) {
+                    target[QStringLiteral("text")] = inserted;
+                    navigation[i] = target;
+                    break;
+                }
+            }
+            entry[QStringLiteral("navigation")] = navigation;
         }
         entry[QStringLiteral("previewTooLarge")] = !small;
         entry[QStringLiteral("previewParts")] = parts;

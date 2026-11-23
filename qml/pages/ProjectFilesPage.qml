@@ -1,6 +1,7 @@
 import QtQuick 2.0
 import Sailfish.Silica 1.0
 import Sailfish.Pickers 1.0
+import Aurora.Controls 1.0
 
 Page {
     id: page
@@ -17,7 +18,31 @@ Page {
     property var uploadQueue: []
     property var uploadCurrent: null
     property string refreshUploadedFile: ""
+    property bool pullRefreshPending: false
     backNavigation: !overleafClient.sourceBusy && !pendingFileOperation && !uploadCurrent
+
+    function refreshFromPull() {
+        if (pullRefreshPending || overleafClient.offline === true || overleafClient.filesBusy
+                || overleafClient.sourceBusy || uploadCurrent) {
+            fileList.PullToRefresh.refreshCompleted(false)
+            return
+        }
+        treeLoaded = false
+        overleafClient.loadProjectFiles(projectId)
+        pullRefreshPending = true
+        refreshStartTimer.restart()
+    }
+    function finishPullRefresh() {
+        if (pullRefreshPending && !overleafClient.filesBusy) {
+            pullRefreshPending = false
+            fileList.PullToRefresh.refreshCompleted(overleafClient.filesError.length === 0)
+        }
+    }
+    Timer {
+        id: refreshStartTimer
+        interval: 0
+        onTriggered: page.finishPullRefresh()
+    }
 
     function joinPath(dir, name) {
         return (dir === "/" ? "/" : dir + "/") + name
@@ -178,6 +203,7 @@ Page {
                 overleafClient.loadProjectFiles(page.projectId)
         }
         onFilesBusyChanged: {
+            page.finishPullRefresh()
             if (!page.ownsFiles)
                 return
             if (overleafClient.filesBusy)
@@ -367,10 +393,33 @@ Page {
         }
     }
 
+    AppBar {
+        id: filesAppBar
+        objectName: "projectFilesAppBar"
+        width: parent.width
+        visible: overleafClient.offline !== true
+        AppBarSpacer { fixedWidth: 0 }
+        AppBarButton {
+            objectName: "projectFilesUpload"
+            context: qsTr("Upload files")
+            icon.source: "image://theme/icon-m-upload"
+            visible: overleafClient.offline !== true
+            enabled: !overleafClient.filesBusy && !overleafClient.sourceBusy && !page.uploadCurrent
+            onClicked: pageStack.push(picker)
+        }
+    }
+
     SilicaListView {
         id: fileList
         objectName: "projectFileList"
-        anchors.fill: parent
+        anchors.top: filesAppBar.visible ? filesAppBar.bottom : parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        PullToRefresh.enabled: overleafClient.offline !== true && !overleafClient.filesBusy
+                               && !overleafClient.sourceBusy && !page.uploadCurrent
+        PullToRefresh.description: qsTr("Pull down to refresh")
+        PullToRefresh.refreshHandler: function() { page.refreshFromPull() }
         model: {
             var result = []
             var seen = {}
@@ -420,23 +469,6 @@ Page {
                 width: parent.width - 2 * x
                 visible: overleafClient.sourceBusy
                 text: qsTr("Working…")
-            }
-        }
-        PullDownMenu {
-            MenuItem {
-                text: qsTr("Upload files")
-                visible: overleafClient.offline !== true
-                enabled: !overleafClient.filesBusy && !overleafClient.sourceBusy && !page.uploadCurrent
-                onClicked: pageStack.push(picker)
-            }
-            MenuItem {
-                text: qsTr("Refresh")
-                visible: overleafClient.offline !== true
-                enabled: !overleafClient.filesBusy && !overleafClient.sourceBusy && !page.uploadCurrent
-                onClicked: {
-                    page.treeLoaded = false
-                    overleafClient.loadProjectFiles(page.projectId)
-                }
             }
         }
         delegate: ListItem {

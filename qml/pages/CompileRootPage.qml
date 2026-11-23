@@ -1,5 +1,6 @@
 import QtQuick 2.0
 import Sailfish.Silica 1.0
+import Aurora.Controls 1.0
 
 Page {
     id: page
@@ -7,13 +8,43 @@ Page {
     property string projectId
     property var editorPage
     property bool compileAfterSelection: false
+    property bool pullRefreshPending: false
+
+    function refreshFromPull() {
+        if (pullRefreshPending || overleafClient.filesBusy) {
+            list.PullToRefresh.refreshCompleted(false)
+            return
+        }
+        overleafClient.loadProjectFiles(page.projectId)
+        pullRefreshPending = true
+        refreshStartTimer.restart()
+    }
+    function finishPullRefresh() {
+        if (pullRefreshPending && !overleafClient.filesBusy) {
+            pullRefreshPending = false
+            list.PullToRefresh.refreshCompleted(overleafClient.filesError.length === 0)
+        }
+    }
+    Connections {
+        target: overleafClient
+        onFilesBusyChanged: page.finishPullRefresh()
+    }
+    Timer {
+        id: refreshStartTimer
+        interval: 0
+        onTriggered: page.finishPullRefresh()
+    }
 
     Component.onCompleted: overleafClient.loadProjectFiles(projectId)
     Component.onDestruction: overleafClient.closeProjectFiles()
 
     SilicaListView {
         id: list
+        objectName: "compileRootList"
         anchors.fill: parent
+        PullToRefresh.enabled: !overleafClient.filesBusy
+        PullToRefresh.description: qsTr("Pull down to refresh")
+        PullToRefresh.refreshHandler: function() { page.refreshFromPull() }
         header: Column {
             width: parent.width
             PageHeader { title: qsTr("Choose main document") }
@@ -34,13 +65,6 @@ Page {
                     result.push(files[i])
             }
             return result
-        }
-        PullDownMenu {
-            MenuItem {
-                text: qsTr("Refresh")
-                enabled: !overleafClient.filesBusy
-                onClicked: overleafClient.loadProjectFiles(page.projectId)
-            }
         }
         delegate: ListItem {
             width: ListView.view.width

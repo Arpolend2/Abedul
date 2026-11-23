@@ -48,6 +48,7 @@ OverleafClient::OverleafClient(QObject *parent) : QObject(parent)
     QSettings settings;
     m_pdfOnLeft = settings.value(QStringLiteral("pdfOnLeft"), false).toBool();
     m_editorFontScale = qBound(70, settings.value(QStringLiteral("editorFontScale"), 100).toInt(), 160);
+    m_sciHubAddress = settings.value(QStringLiteral("sciHubAddress"), QStringLiteral("https://sci-hub.ru")).toString();
     m_completionHintCount = qBound(0, settings.value(QStringLiteral("completionHintCount"), 0).toInt(), 5);
     m_rememberedServers = settings.value(QStringLiteral("servers")).toStringList();
     m_rememberedServer = settings.value(QStringLiteral("lastServer")).toString();
@@ -571,6 +572,36 @@ QString OverleafClient::sourceError() const { return m_sourceError; }
 bool OverleafClient::sourceBusy() const { return m_sourceBusy; }
 bool OverleafClient::pdfOnLeft() const { return m_pdfOnLeft; }
 int OverleafClient::editorFontScale() const { return m_editorFontScale; }
+QString OverleafClient::sciHubAddress() const { return m_sciHubAddress; }
+
+bool OverleafClient::setSciHubAddress(const QString &address)
+{
+    const QUrl url(address.trimmed(), QUrl::StrictMode);
+    if (!url.isValid() || url.scheme().toLower() != QStringLiteral("https") || url.host().isEmpty()
+            || !url.userInfo().isEmpty() || url.hasQuery() || url.hasFragment())
+        return false;
+    const QString normalized = url.toString(QUrl::RemovePassword | QUrl::StripTrailingSlash);
+    QSettings settings;
+    settings.setValue(QStringLiteral("sciHubAddress"), normalized);
+    settings.sync();
+    if (settings.status() != QSettings::NoError)
+        return false;
+    if (normalized != m_sciHubAddress) {
+        m_sciHubAddress = normalized;
+        emit sciHubAddressChanged();
+    }
+    return true;
+}
+
+QUrl OverleafClient::sciHubSearchUrl(const QString &query) const
+{
+    const QUrl base(m_sciHubAddress, QUrl::StrictMode);
+    const QString value = query.trimmed();
+    if (value.isEmpty() || !base.isValid() || base.scheme().toLower() != QStringLiteral("https")
+            || base.host().isEmpty() || !base.userInfo().isEmpty() || base.hasQuery() || base.hasFragment())
+        return QUrl();
+    return QUrl::fromEncoded(base.toEncoded(QUrl::StripTrailingSlash) + '/' + QUrl::toPercentEncoding(value));
+}
 
 void OverleafClient::setCoverEditor(QObject *editor)
 {

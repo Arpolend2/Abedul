@@ -15,6 +15,8 @@
 #include "doubletapmonitor.h"
 #include "completionkeyfilter.h"
 #include "openrouterclient.h"
+#include "wolframalphaclient.h"
+#include "reversoclient.h"
 
 int main(int argc, char **argv)
 {
@@ -38,6 +40,8 @@ int main(int argc, char **argv)
     qmlRegisterType<DoubleTapMonitor>("Abedul", 1, 0, "DoubleTapMonitor");
     qmlRegisterType<CompletionKeyFilter>("Abedul", 1, 0, "CompletionKeyFilter");
     qmlRegisterType<OpenRouterClient>("Abedul", 1, 0, "OpenRouterClient");
+    qmlRegisterType<WolframAlphaClient>("Abedul", 1, 0, "WolframAlphaClient");
+    qmlRegisterType<ReversoClient>("Abedul", 1, 0, "ReversoClient");
 
     OverleafClient client;
     DraftStore drafts;
